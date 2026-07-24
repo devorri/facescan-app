@@ -1,98 +1,143 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useState } from 'react';
+import { Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Colors, Radius, Shadow, Spacing } from '@/constants/design';
+import { AccessRecordsScreen } from '@/screens/AccessRecordsScreen';
+import { DashboardScreen } from '@/screens/DashboardScreen';
+import { FacultyManagementScreen } from '@/screens/FacultyManagementScreen';
+import { LaboratorySchedulingScreen } from '@/screens/LaboratorySchedulingScreen';
+import { LoginScreen } from '@/screens/LoginScreen';
+import { ProfileScreen } from '@/screens/ProfileScreen';
+import { RealtimeMonitoringScreen } from '@/screens/RealtimeMonitoringScreen';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'monitoring' | 'profile';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
+const tabs: Array<{ key: TabKey; label: string }> = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'faculty', label: 'Faculty' },
+  { key: 'schedule', label: 'Schedule' },
+  { key: 'records', label: 'Records' },
+  { key: 'monitoring', label: 'Monitor' },
+  { key: 'profile', label: 'Profile' },
+];
+
+export default function AdminApp() {
+  const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  if (!isLoggedIn) {
     return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
+      <LoginScreen
+        onSignedIn={() => setIsLoggedIn(true)}
+      />
     );
   }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="light" />
+      <View style={styles.header}>
+        <Image
+          source={require('@/assets/images/logo.png')}
+          style={styles.headerLogo}
+          resizeMode="contain"
+        />
+        <Text style={styles.title}>Lab Access Admin</Text>
+      </View>
+      <View style={styles.content}>{renderScreen(activeTab, () => { setIsLoggedIn(false); setActiveTab('dashboard'); })}</View>
+      <View style={styles.tabShell}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+          {tabs.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.tab, activeTab === tab.key && styles.activeTab]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Text style={[styles.tabText, activeTab === tab.key && styles.activeTabText]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+    </SafeAreaView>
   );
 }
 
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
-  );
+function renderScreen(activeTab: TabKey, onSignedOut: () => void) {
+  switch (activeTab) {
+    case 'faculty':
+      return <FacultyManagementScreen />;
+    case 'schedule':
+      return <LaboratorySchedulingScreen />;
+    case 'records':
+      return <AccessRecordsScreen />;
+    case 'monitoring':
+      return <RealtimeMonitoringScreen />;
+    case 'profile':
+      return <ProfileScreen onSignedOut={onSignedOut} />;
+    default:
+      return <DashboardScreen />;
+  }
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
   safeArea: {
     flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
+    backgroundColor: Colors.navyDark,
   },
-  heroSection: {
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+    gap: 12,
+    paddingHorizontal: Spacing.lg,
+    paddingBottom: Spacing.sm,
+    paddingTop: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.navyLight,
+  },
+  headerLogo: {
+    width: 36,
+    height: 36,
   },
   title: {
-    textAlign: 'center',
+    color: Colors.textWhite,
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
-  code: {
-    textTransform: 'uppercase',
+  content: {
+    flex: 1,
+    backgroundColor: Colors.surfaceAlt,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  tabShell: {
+    backgroundColor: Colors.navy,
+    borderTopWidth: 1,
+    borderTopColor: Colors.navyLight,
+  },
+  tabs: {
+    gap: 8,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 12,
+  },
+  tab: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.sm,
+    minWidth: 84,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    height: 36,
+  },
+  activeTab: {
+    backgroundColor: Colors.navyLight,
+  },
+  tabText: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  activeTabText: {
+    color: Colors.blueLight,
   },
 });
