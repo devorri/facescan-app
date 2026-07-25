@@ -11,6 +11,7 @@ export type Database = {
           name: string;
           role: string;
           face_embedding: number[] | null;
+          camera_status?: string | null;
           created_at: string;
         };
         Insert: {
@@ -18,12 +19,14 @@ export type Database = {
           name: string;
           role: string;
           face_embedding?: number[] | null;
+          camera_status?: string | null;
           created_at?: string;
         };
         Update: {
           name?: string;
           role?: string;
           face_embedding?: number[] | null;
+          camera_status?: string | null;
         };
         Relationships: [];
       };
@@ -32,17 +35,23 @@ export type Database = {
           id: string;
           name: string;
           location: string | null;
+          pi_status: Record<string, unknown> | null;
+          mode: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           name: string;
           location?: string | null;
+          pi_status?: Record<string, unknown> | null;
+          mode?: string | null;
           created_at?: string;
         };
         Update: {
           name?: string;
           location?: string | null;
+          pi_status?: Record<string, unknown> | null;
+          mode?: string | null;
         };
         Relationships: [];
       };
