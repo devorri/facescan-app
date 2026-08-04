@@ -1,6 +1,19 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Camera,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ScanFace,
+  ShieldCheck,
+  ShieldAlert,
+  UserPlus,
+  Wifi,
+  WifiOff,
+} from 'lucide-react-native';
 import { AppButton } from '../components/AppButton';
 import { FormField } from '../components/FormField';
 import { ScreenState } from '../components/ScreenState';
@@ -20,6 +33,8 @@ import {
 } from '../services/facultyService';
 import type { Profile } from '../types/database';
 
+const ITEMS_PER_PAGE = 10;
+
 export function FacultyManagementScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
@@ -38,16 +53,33 @@ export function FacultyManagementScreen() {
   const [currentMode, setCurrentMode] = useState<string>('recognition');
   const [changingMode, setChangingMode] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>('');
-  // 🔥 NEW: Track enrollment status for the selected faculty
+  // Enrollment status tracking
   const [enrollmentStatus, setEnrollmentStatus] = useState<string>('idle');
-  // 🔥 NEW: Auto-reset timer reference
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // UI collapse states
+  const [cameraExpanded, setCameraExpanded] = useState(false);
+  const [showPhoneFallback, setShowPhoneFallback] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(faculty.length / ITEMS_PER_PAGE));
+  const paginatedFaculty = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return faculty.slice(start, start + ITEMS_PER_PAGE);
+  }, [faculty, currentPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [faculty.length, totalPages, currentPage]);
 
   const loadFaculty = useCallback(async () => {
     const rows = await listFaculty();
     setFaculty(rows);
 
-    // 🔥 Update selected faculty status if it exists
+    // Update selected faculty status if it exists
     if (selectedFaculty) {
       const updated = rows.find(f => f.id === selectedFaculty.id);
       if (updated) {
@@ -70,7 +102,7 @@ export function FacultyManagementScreen() {
     }).catch(() => { });
   }, []);
 
-  // 🔥 NEW: Clean up timer on unmount
+  // Clean up timer on unmount
   useEffect(() => {
     return () => {
       if (resetTimerRef.current) {
@@ -128,6 +160,7 @@ export function FacultyManagementScreen() {
     setName('');
     setRole('faculty');
     setEnrollmentStatus('idle');
+    setCameraExpanded(false);
     if (resetTimerRef.current) {
       clearTimeout(resetTimerRef.current);
       resetTimerRef.current = null;
@@ -139,6 +172,8 @@ export function FacultyManagementScreen() {
     setName(profile.name);
     setRole(profile.role);
     setEnrollmentStatus(profile.camera_status || 'idle');
+    // Auto-expand camera section when a faculty is selected
+    setCameraExpanded(true);
   };
 
   const saveFaculty = async () => {
@@ -184,7 +219,7 @@ export function FacultyManagementScreen() {
     ]);
   };
 
-  // 🔥 FIXED: Poll status with enrollment status reset
+  // Poll Pi status
   const pollStatus = useCallback(async () => {
     setCheckingStatus(true);
     try {
@@ -196,7 +231,7 @@ export function FacultyManagementScreen() {
         setCurrentMode(status.mode);
       }
 
-      // 🔥 Check and reset stale enrollment status for selected faculty
+      // Check and reset stale enrollment status for selected faculty
       if (selectedFaculty) {
         const { data } = await supabase
           .from('profiles')
@@ -208,17 +243,15 @@ export function FacultyManagementScreen() {
           const newStatus = data.camera_status;
           setEnrollmentStatus(newStatus);
 
-          // 🔥 Auto-reset failed status after 3 seconds
+          // Auto-reset failed status after 3 seconds
           if (newStatus === 'failed_camera_offline' ||
             newStatus === 'failed_camera_error' ||
             newStatus === 'failed_no_face') {
 
-            // Clear any existing timer
             if (resetTimerRef.current) {
               clearTimeout(resetTimerRef.current);
             }
 
-            // Set new timer
             resetTimerRef.current = setTimeout(async () => {
               console.log('🔄 Auto-resetting stale enrollment status...');
               await supabase
@@ -266,7 +299,6 @@ export function FacultyManagementScreen() {
       return;
     }
 
-    // Check if Pi is in enrollment mode
     if (currentMode !== 'enrollment') {
       Alert.alert(
         'Wrong Mode',
@@ -285,7 +317,6 @@ export function FacultyManagementScreen() {
       return;
     }
 
-    // 🔥 Reset enrollment status before starting
     setEnrollmentStatus('pending');
     await supabase
       .from('profiles')
@@ -357,27 +388,26 @@ export function FacultyManagementScreen() {
     }
   };
 
-  // 🔥 Helper to get enrollment status display
   const getEnrollmentStatusDisplay = () => {
     switch (enrollmentStatus) {
       case 'idle':
-        return { text: 'IDLE — Awaiting enrollment', color: Colors.textSecondary };
+        return { text: 'Awaiting enrollment', color: Colors.textSecondary };
       case 'pending':
-        return { text: 'PENDING — Waiting for Pi...', color: '#FFA500' };
+        return { text: 'Waiting for Pi…', color: '#FFA500' };
       case 'capturing':
-        return { text: 'CAPTURING — Pi is capturing...', color: '#3b82f6' };
+        return { text: 'Pi is capturing…', color: '#3b82f6' };
       case 'completed':
-        return { text: '✅ COMPLETED — Face enrolled!', color: Colors.success };
+        return { text: 'Face enrolled ✓', color: Colors.success };
       case 'failed':
-        return { text: '❌ FAILED — Capture failed', color: Colors.danger };
+        return { text: 'Capture failed', color: Colors.danger };
       case 'failed_camera_offline':
-        return { text: '❌ FAILED — Camera offline', color: Colors.danger };
+        return { text: 'Camera offline', color: Colors.danger };
       case 'failed_camera_error':
-        return { text: '❌ FAILED — Camera error', color: Colors.danger };
+        return { text: 'Camera error', color: Colors.danger };
       case 'failed_no_face':
-        return { text: '❌ FAILED — No face detected', color: Colors.danger };
+        return { text: 'No face detected', color: Colors.danger };
       default:
-        return { text: enrollmentStatus || 'IDLE', color: Colors.textSecondary };
+        return { text: enrollmentStatus || 'Idle', color: Colors.textSecondary };
     }
   };
 
@@ -391,7 +421,8 @@ export function FacultyManagementScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.heading}>Faculty Management</Text>
 
-      <View style={styles.form}>
+      {/* ── Registration form ── */}
+      <View style={styles.card}>
         <FormField label="Full Name" value={name} onChangeText={setName} placeholder="Enter full name" />
         <FormField label="Department / Role" value={role} onChangeText={setRole} placeholder="e.g. CCS Instructor" />
         <View style={styles.actions}>
@@ -400,227 +431,289 @@ export function FacultyManagementScreen() {
             loading={saving}
             onPress={saveFaculty}
           />
-          <AppButton label="Clear Form" variant="secondary" onPress={resetForm} />
+          <AppButton label="Clear" variant="secondary" onPress={resetForm} />
         </View>
       </View>
 
-      <View style={styles.cameraSection}>
-        <Text style={styles.sectionTitle}>Raspberry Pi Camera Capture (Recommended)</Text>
-        <FormField
-          label="Raspberry Pi IP Address"
-          value={piIp}
-          onChangeText={setPiIp}
-          placeholder="192.168.100.19"
-        />
+      {/* ── Pi Camera Section (collapsible) ── */}
+      <TouchableOpacity
+        style={styles.sectionToggle}
+        onPress={() => setCameraExpanded(!cameraExpanded)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.sectionToggleLeft}>
+          <Camera size={18} color={Colors.blue} strokeWidth={2} />
+          <Text style={styles.sectionToggleTitle}>Pi Camera Enrollment</Text>
+        </View>
+        <View style={styles.sectionToggleRight}>
+          {/* Mini status indicator */}
+          <View style={[styles.miniDot, {
+            backgroundColor: piStatus?.online ? Colors.success : Colors.danger,
+          }]} />
+          {cameraExpanded
+            ? <ChevronUp size={20} color={Colors.textMuted} strokeWidth={2} />
+            : <ChevronDown size={20} color={Colors.textMuted} strokeWidth={2} />
+          }
+        </View>
+      </TouchableOpacity>
 
-        <View style={styles.debugContainer}>
-          <AppButton
-            label="🐛 Debug Database Status"
-            variant="secondary"
-            onPress={debugDatabase}
+      {cameraExpanded && (
+        <View style={styles.cameraSection}>
+          {/* Selected faculty banner */}
+          {selectedFaculty ? (
+            <View style={styles.selectedBanner}>
+              <ScanFace size={18} color={Colors.blue} strokeWidth={2} />
+              <View style={styles.selectedBannerText}>
+                <Text style={styles.selectedName}>{selectedFaculty.name}</Text>
+                <Text style={[styles.selectedStatus, { color: enrollmentDisplay.color }]}>
+                  {enrollmentDisplay.text}
+                </Text>
+              </View>
+              {selectedFaculty.face_embedding ? (
+                <ShieldCheck size={20} color={Colors.success} strokeWidth={2} />
+              ) : (
+                <ShieldAlert size={20} color={Colors.warning} strokeWidth={2} />
+              )}
+            </View>
+          ) : (
+            <View style={styles.noSelectionBanner}>
+              <Text style={styles.noSelectionText}>Select a faculty member below to enroll facial data</Text>
+            </View>
+          )}
+
+          {/* Pi IP */}
+          <FormField
+            label="Raspberry Pi IP"
+            value={piIp}
+            onChangeText={setPiIp}
+            placeholder="192.168.100.19"
           />
-          {debugInfo !== '' && (
-            <View style={styles.debugBox}>
-              <Text style={styles.debugText}>{debugInfo}</Text>
+
+          {/* Compact status card */}
+          <View style={styles.statusCard}>
+            <StatusRow
+              label="Server"
+              value={piStatus?.online ? 'Online' : 'Offline'}
+              color={piStatus?.online ? Colors.success : Colors.danger}
+            />
+            <StatusRow
+              label="Camera"
+              value={piStatus?.cameraReady ? 'Ready' : 'Unavailable'}
+              color={piStatus?.cameraReady ? Colors.success : Colors.warning}
+            />
+            <StatusRow
+              label="Face"
+              value={piStatus?.faceDetected ? 'Detected' : 'None'}
+              color={piStatus?.faceDetected ? Colors.success : Colors.textMuted}
+            />
+            <StatusRow
+              label="Mode"
+              value={currentMode.toUpperCase()}
+              color={currentMode === 'recognition' ? Colors.success : currentMode === 'enrollment' ? '#FFA500' : Colors.textSecondary}
+            />
+          </View>
+
+          {/* Mode control - compact */}
+          <View style={styles.modeRow}>
+            {(['recognition', 'enrollment', 'idle'] as const).map((mode) => (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.modeChip, currentMode === mode && styles.modeChipActive]}
+                onPress={() => switchPiMode(mode)}
+                disabled={changingMode}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.modeChipText, currentMode === mode && styles.modeChipTextActive]}>
+                  {mode === 'recognition' ? '🔒' : mode === 'enrollment' ? '📸' : '💤'}{' '}
+                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Countdown overlay */}
+          {countdown !== null && (
+            <View style={styles.countdownBox}>
+              <Text style={styles.countdownText}>Capturing in {countdown}...</Text>
+            </View>
+          )}
+
+          {/* Capture buttons */}
+          <View style={styles.captureActions}>
+            <AppButton
+              label="Capture Now"
+              disabled={!selectedFaculty}
+              loading={enrollingPi && countdown === null}
+              onPress={() => captureViaPiWithCountdown(0)}
+            />
+            <AppButton
+              label="3s Countdown"
+              variant="secondary"
+              disabled={!selectedFaculty}
+              loading={enrollingPi && countdown !== null}
+              onPress={() => captureViaPiWithCountdown(3)}
+            />
+          </View>
+
+          {/* Phone camera fallback - collapsed */}
+          <TouchableOpacity
+            style={styles.fallbackToggle}
+            onPress={() => setShowPhoneFallback(!showPhoneFallback)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.fallbackToggleText}>Phone Camera Fallback</Text>
+            {showPhoneFallback
+              ? <ChevronUp size={16} color={Colors.textMuted} strokeWidth={2} />
+              : <ChevronDown size={16} color={Colors.textMuted} strokeWidth={2} />
+            }
+          </TouchableOpacity>
+
+          {showPhoneFallback && (
+            <View style={styles.fallbackContent}>
+              {permission?.granted ? (
+                <CameraView ref={cameraRef} facing="front" style={styles.camera} />
+              ) : (
+                <View style={styles.permissionBox}>
+                  <Text style={styles.muted}>Camera permission is needed for phone face enrollment.</Text>
+                  <AppButton label="Allow Camera Access" variant="secondary" onPress={requestPermission} />
+                </View>
+              )}
+              <AppButton
+                label="Capture via Phone Camera"
+                variant="secondary"
+                disabled={!selectedFaculty}
+                loading={enrolling}
+                onPress={captureAndEnroll}
+              />
+            </View>
+          )}
+
+          {/* Debug - hidden behind toggle (long press title to reveal) */}
+          <TouchableOpacity
+            style={styles.fallbackToggle}
+            onPress={() => setShowDebug(!showDebug)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.fallbackToggleText}>Debug Tools</Text>
+            {showDebug
+              ? <ChevronUp size={16} color={Colors.textMuted} strokeWidth={2} />
+              : <ChevronDown size={16} color={Colors.textMuted} strokeWidth={2} />
+            }
+          </TouchableOpacity>
+
+          {showDebug && (
+            <View style={styles.debugContainer}>
+              <AppButton
+                label="Debug Database Status"
+                variant="secondary"
+                onPress={debugDatabase}
+              />
+              <AppButton
+                label={checkingStatus ? 'Checking…' : 'Refresh Status'}
+                variant="secondary"
+                loading={checkingStatus}
+                onPress={pollStatus}
+              />
+              {debugInfo !== '' && (
+                <View style={styles.debugBox}>
+                  <Text style={styles.debugText}>{debugInfo}</Text>
+                </View>
+              )}
+              {piStatus?.message && (
+                <Text style={styles.statusMessage}>{piStatus.message}</Text>
+              )}
             </View>
           )}
         </View>
+      )}
 
-        {/* Pi Mode Control */}
-        <View style={styles.modeControl}>
-          <Text style={styles.sectionTitle}>Pi Mode Control</Text>
-          <View style={styles.modeButtons}>
-            <AppButton
-              label="🔒 Recognition"
-              variant={currentMode === 'recognition' ? 'primary' : 'secondary'}
-              onPress={() => switchPiMode('recognition')}
-              disabled={changingMode}
-            />
-            <AppButton
-              label="📸 Enrollment"
-              variant={currentMode === 'enrollment' ? 'primary' : 'secondary'}
-              onPress={() => switchPiMode('enrollment')}
-              disabled={changingMode}
-            />
-            <AppButton
-              label="💤 Idle"
-              variant={currentMode === 'idle' ? 'primary' : 'secondary'}
-              onPress={() => switchPiMode('idle')}
-              disabled={changingMode}
-            />
-          </View>
-          <Text style={styles.modeDescription}>
-            {currentMode === 'recognition' && '🟢 Normal operation - face recognition active'}
-            {currentMode === 'enrollment' && '🟠 Enrollment mode - ready to capture faces'}
-            {currentMode === 'idle' && '⚪ System idle - no processing'}
+      {/* ── Faculty list ── */}
+      <View style={styles.listHeaderRow}>
+        <Text style={styles.sectionTitle}>Registered Faculty ({faculty.length})</Text>
+        {totalPages > 1 && (
+          <Text style={styles.pageCountHeader}>
+            Page {currentPage} of {totalPages}
           </Text>
-          {changingMode && <Text style={styles.modeDescription}>⏳ Changing mode...</Text>}
-        </View>
-
-        {/* Live Pi Camera Telemetry Card */}
-        <View style={styles.statusBox}>
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Pi Server Status:</Text>
-            <Text
-              style={[
-                styles.statusValue,
-                { color: piStatus?.online ? Colors.success : Colors.warning },
-              ]}
-            >
-              {checkingStatus
-                ? 'Checking... ⏳'
-                : piStatus?.online
-                  ? 'Online 🟢'
-                  : 'Offline / Unreachable 🔴'}
-            </Text>
-          </View>
-
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Pi Camera Readiness:</Text>
-            <Text
-              style={[
-                styles.statusValue,
-                { color: piStatus?.cameraReady ? Colors.success : Colors.warning },
-              ]}
-            >
-              {piStatus?.cameraReady ? 'Camera Ready 🟢' : 'Camera Unavailable ⚠️'}
-            </Text>
-          </View>
-
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Face Position Check:</Text>
-            <Text
-              style={[
-                styles.statusValue,
-                { color: piStatus?.faceDetected ? Colors.success : Colors.warning },
-              ]}
-            >
-              {piStatus?.faceDetected
-                ? 'Face Detected in View! 👤🟢'
-                : 'No Face Detected in Camera ⚠️'}
-            </Text>
-          </View>
-
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Current Mode:</Text>
-            <Text
-              style={[
-                styles.statusValue,
-                {
-                  color: currentMode === 'recognition' ? Colors.success :
-                    currentMode === 'enrollment' ? '#FFA500' :
-                      Colors.textSecondary
-                },
-              ]}
-            >
-              {currentMode.toUpperCase()}
-            </Text>
-          </View>
-
-          {/* 🔥 NEW: Enrollment Status Row */}
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Enrollment Status:</Text>
-            <Text
-              style={[
-                styles.statusValue,
-                { color: enrollmentDisplay.color },
-              ]}
-            >
-              {enrollmentDisplay.text}
-            </Text>
-          </View>
-
-          {piStatus?.message && (
-            <Text style={styles.statusMessageText}>{piStatus.message}</Text>
-          )}
-
-          <AppButton
-            label={checkingStatus ? 'Checking Status...' : 'Check Camera Status 🔄'}
-            variant="secondary"
-            loading={checkingStatus}
-            onPress={pollStatus}
-          />
-        </View>
-
-        {countdown !== null && (
-          <View style={styles.countdownBox}>
-            <Text style={styles.countdownText}>Capturing in {countdown}...</Text>
-          </View>
         )}
-
-        <View style={styles.actions}>
-          <AppButton
-            label="CAPTURE NOW 📷"
-            disabled={!selectedFaculty}
-            loading={enrollingPi && countdown === null}
-            onPress={() => captureViaPiWithCountdown(0)}
-          />
-          <AppButton
-            label="Capture (3s Countdown) ⏱️"
-            variant="secondary"
-            disabled={!selectedFaculty}
-            loading={enrollingPi && countdown !== null}
-            onPress={() => captureViaPiWithCountdown(3)}
-          />
-        </View>
-
-        <Text style={styles.selectedFacultyText}>
-          {selectedFaculty
-            ? `👤 Enrolling: ${selectedFaculty.name} (${selectedFaculty.face_embedding ? 'Face Enrolled ✅' : 'Face Pending ⚠️'
-            })`
-            : 'Select a faculty member below to enroll facial data.'}
-        </Text>
-
-        <Text style={[styles.sectionTitle, { marginTop: Spacing.sm }]}>Fallback: Phone Camera Capture</Text>
-        {permission?.granted ? (
-          <CameraView ref={cameraRef} facing="front" style={styles.camera} />
-        ) : (
-          <View style={styles.permissionBox}>
-            <Text style={styles.muted}>Camera permission is needed for phone face enrollment.</Text>
-            <AppButton label="Allow Camera Access" variant="secondary" onPress={requestPermission} />
-          </View>
-        )}
-        <AppButton
-          label="Capture via Phone Camera"
-          variant="secondary"
-          disabled={!selectedFaculty}
-          loading={enrolling}
-          onPress={captureAndEnroll}
-        />
       </View>
 
-      <Text style={styles.sectionTitle}>Registered Faculty</Text>
       <FlatList
         scrollEnabled={false}
-        data={faculty}
+        data={paginatedFaculty}
         keyExtractor={(item) => item.id}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={<Text style={styles.muted}>No faculty records found.</Text>}
         contentContainerStyle={styles.listContainer}
         renderItem={({ item }) => (
-          <View style={styles.row}>
+          <TouchableOpacity
+            style={[styles.row, selectedFaculty?.id === item.id && styles.rowSelected]}
+            onPress={() => selectFaculty(item)}
+            activeOpacity={0.7}
+          >
+            {/* Face status icon badge */}
+            <View style={[styles.faceBadge, {
+              backgroundColor: item.face_embedding ? '#D1FAE5' : '#FEF3C7',
+            }]}>
+              {item.face_embedding
+                ? <ShieldCheck size={18} color={Colors.success} strokeWidth={2} />
+                : <ShieldAlert size={18} color={Colors.warning} strokeWidth={2} />
+              }
+            </View>
             <View style={styles.rowBody}>
               <Text style={styles.rowTitle}>{item.name}</Text>
-              <Text style={styles.rowSubtitle}>
-                {item.role} •{' '}
-                <Text
-                  style={[
-                    styles.statusText,
-                    { color: item.face_embedding ? Colors.success : Colors.warning },
-                  ]}
-                >
-                  {item.face_embedding ? 'Face Registered' : 'No Face Enrolled'}
-                </Text>
-              </Text>
+              <Text style={styles.rowSubtitle}>{item.role}</Text>
             </View>
             <View style={styles.rowActions}>
-              <AppButton label="Edit" variant="secondary" onPress={() => selectFaculty(item)} />
-              <AppButton label="Delete" variant="danger" onPress={() => removeFaculty(item)} />
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => removeFaculty(item)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         )}
       />
+
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <View style={styles.paginationRow}>
+          <TouchableOpacity
+            style={[styles.pageBtn, currentPage === 1 && styles.pageBtnDisabled]}
+            disabled={currentPage === 1}
+            onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            activeOpacity={0.7}
+          >
+            <ChevronLeft size={16} color={currentPage === 1 ? Colors.textMuted : Colors.textPrimary} />
+            <Text style={[styles.pageBtnText, currentPage === 1 && styles.pageBtnTextDisabled]}>Previous</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.pageIndicator}>
+            {currentPage} / {totalPages}
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.pageBtn, currentPage === totalPages && styles.pageBtnDisabled]}
+            disabled={currentPage === totalPages}
+            onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.pageBtnText, currentPage === totalPages && styles.pageBtnTextDisabled]}>Next</Text>
+            <ChevronRight size={16} color={currentPage === totalPages ? Colors.textMuted : Colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+      )}
     </ScrollView>
+  );
+}
+
+function StatusRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <View style={styles.statusRow}>
+      <Text style={styles.statusLabel}>{label}</Text>
+      <Text style={[styles.statusValue, { color }]}>{value}</Text>
+    </View>
   );
 }
 
@@ -630,7 +723,7 @@ function getErrorMessage(error: unknown) {
 
 const styles = StyleSheet.create({
   container: {
-    gap: Spacing.lg,
+    gap: Spacing.md,
     padding: Spacing.lg,
     paddingBottom: Spacing.xxl,
   },
@@ -640,7 +733,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.5,
   },
-  form: {
+  card: {
     backgroundColor: Colors.card,
     borderRadius: Radius.md,
     padding: Spacing.lg,
@@ -653,8 +746,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: Spacing.xs,
-    flexWrap: 'wrap',
   },
+
+  // ── Section toggle ─────────────────────────
+  sectionToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadow.sm,
+  },
+  sectionToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sectionToggleTitle: {
+    color: Colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  sectionToggleRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  miniDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  // ── Camera section ─────────────────────────
   cameraSection: {
     backgroundColor: Colors.card,
     borderRadius: Radius.md,
@@ -664,11 +791,131 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     ...Shadow.sm,
   },
-  sectionTitle: {
+
+  // ── Selected faculty banner ────────────────
+  selectedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EBF5FF',
+    borderRadius: Radius.sm,
+    padding: Spacing.md,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#BFE0FF',
+  },
+  selectedBannerText: {
+    flex: 1,
+    gap: 2,
+  },
+  selectedName: {
     color: Colors.textPrimary,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
-    letterSpacing: -0.2,
+  },
+  selectedStatus: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  noSelectionBanner: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.sm,
+    padding: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  noSelectionText: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+
+  // ── Status card ────────────────────────────
+  statusCard: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.sm,
+    padding: Spacing.sm,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  statusLabel: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statusValue: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  // ── Mode control ───────────────────────────
+  modeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modeChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modeChipActive: {
+    backgroundColor: '#EBF5FF',
+    borderColor: Colors.blue,
+  },
+  modeChipText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  modeChipTextActive: {
+    color: Colors.blue,
+  },
+
+  // ── Capture ────────────────────────────────
+  captureActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  countdownBox: {
+    backgroundColor: '#3b82f6',
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    alignItems: 'center',
+  },
+  countdownText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+
+  // ── Fallback toggle ────────────────────────
+  fallbackToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  fallbackToggleText: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  fallbackContent: {
+    gap: Spacing.md,
   },
   camera: {
     aspectRatio: 3 / 4,
@@ -686,63 +933,37 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  muted: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
+
+  // ── Debug ──────────────────────────────────
+  debugContainer: {
+    gap: Spacing.sm,
   },
-  selectedFacultyText: {
-    color: Colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    backgroundColor: Colors.surfaceAlt,
-    padding: 10,
+  debugBox: {
+    backgroundColor: '#1a1a2e',
     borderRadius: Radius.sm,
+    padding: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  statusBox: {
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    gap: Spacing.xs,
-    borderWidth: 1,
-    borderColor: Colors.border,
+  debugText: {
+    color: '#00ff00',
+    fontSize: 11,
+    fontFamily: 'monospace',
   },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  statusLabel: {
+  statusMessage: {
     color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  statusValue: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  statusMessageText: {
-    color: Colors.textPrimary,
     fontSize: 12,
     fontWeight: '600',
     textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 4,
   },
-  countdownBox: {
-    backgroundColor: '#3b82f6',
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-  },
-  countdownText: {
-    color: '#ffffff',
-    fontSize: 18,
+
+  // ── Faculty list ───────────────────────────
+  sectionTitle: {
+    color: Colors.textPrimary,
+    fontSize: 16,
     fontWeight: '800',
+    letterSpacing: -0.2,
+    marginTop: Spacing.xs,
   },
   listContainer: {
     gap: Spacing.sm,
@@ -753,14 +974,25 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 12,
     borderWidth: 1,
     borderColor: Colors.border,
     ...Shadow.sm,
   },
+  rowSelected: {
+    borderColor: Colors.blue,
+    backgroundColor: '#FAFCFF',
+  },
+  faceBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   rowBody: {
     flex: 1,
-    gap: 4,
+    gap: 2,
   },
   rowTitle: {
     color: Colors.textPrimary,
@@ -776,45 +1008,76 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
   },
-  statusText: {
-    fontWeight: '800',
+  deleteBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.dangerBg,
   },
-  separator: {
-    height: 8,
+  deleteBtnText: {
+    color: Colors.danger,
+    fontSize: 12,
+    fontWeight: '700',
   },
-  modeControl: {
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  modeButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  modeDescription: {
+  muted: {
     color: Colors.textSecondary,
     fontSize: 13,
     fontWeight: '600',
     textAlign: 'center',
-    marginTop: 4,
   },
-  debugContainer: {
-    gap: Spacing.sm,
+  separator: {
+    height: 8,
   },
-  debugBox: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: Radius.sm,
-    padding: Spacing.sm,
+  listHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: Spacing.xs,
+  },
+  pageCountHeader: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  paginationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.card,
+    borderRadius: Radius.md,
+    padding: Spacing.xs + 2,
+    paddingHorizontal: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.border,
+    marginTop: Spacing.xs,
   },
-  debugText: {
-    color: '#00ff00',
-    fontSize: 11,
-    fontFamily: 'monospace',
+  pageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 4,
+  },
+  pageBtnDisabled: {
+    opacity: 0.5,
+    backgroundColor: Colors.card,
+    borderColor: Colors.border,
+  },
+  pageBtnText: {
+    color: Colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pageBtnTextDisabled: {
+    color: Colors.textMuted,
+  },
+  pageIndicator: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

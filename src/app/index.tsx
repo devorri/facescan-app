@@ -1,7 +1,9 @@
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
-import { Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Colors, Radius, Shadow, Spacing } from '@/constants/design';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Activity, CalendarDays, ClipboardList, LayoutDashboard, type LucideIcon, UserCircle, Users } from 'lucide-react-native';
+import { Colors, Radius, Spacing } from '@/constants/design';
 import { AccessRecordsScreen } from '@/screens/AccessRecordsScreen';
 import { DashboardScreen } from '@/screens/DashboardScreen';
 import { FacultyManagementScreen } from '@/screens/FacultyManagementScreen';
@@ -12,18 +14,19 @@ import { RealtimeMonitoringScreen } from '@/screens/RealtimeMonitoringScreen';
 
 type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'monitoring' | 'profile';
 
-const tabs: Array<{ key: TabKey; label: string }> = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'faculty', label: 'Faculty' },
-  { key: 'schedule', label: 'Schedule' },
-  { key: 'records', label: 'Records' },
-  { key: 'monitoring', label: 'Monitor' },
-  { key: 'profile', label: 'Profile' },
+const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
+  { key: 'dashboard', label: 'Home', icon: LayoutDashboard },
+  { key: 'faculty', label: 'Faculty', icon: Users },
+  { key: 'schedule', label: 'Schedule', icon: CalendarDays },
+  { key: 'records', label: 'Records', icon: ClipboardList },
+  { key: 'monitoring', label: 'Monitor', icon: Activity },
+  { key: 'profile', label: 'Profile', icon: UserCircle },
 ];
 
 export default function AdminApp() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const insets = useSafeAreaInsets();
 
   if (!isLoggedIn) {
     return (
@@ -34,7 +37,7 @@ export default function AdminApp() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar style="light" />
       <View style={styles.header}>
         <Image
@@ -44,27 +47,49 @@ export default function AdminApp() {
         />
         <Text style={styles.title}>Lab Access Admin</Text>
       </View>
-      <View style={styles.content}>{renderScreen(activeTab, () => { setIsLoggedIn(false); setActiveTab('dashboard'); })}</View>
-      <View style={styles.tabShell}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
-          {tabs.map((tab) => (
+
+      <View style={styles.content}>
+        {renderScreen(
+          activeTab,
+          () => { setIsLoggedIn(false); setActiveTab('dashboard'); },
+          (tab) => setActiveTab(tab)
+        )}
+      </View>
+
+      <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.key;
+          const Icon = tab.icon;
+          return (
             <TouchableOpacity
               key={tab.key}
-              style={[styles.tab, activeTab === tab.key && styles.activeTab]}
+              style={styles.tabItem}
               onPress={() => setActiveTab(tab.key)}
+              activeOpacity={0.7}
             >
-              <Text style={[styles.tabText, activeTab === tab.key && styles.activeTabText]}>
+              <View style={[styles.tabIconWrap, isActive && styles.tabIconWrapActive]}>
+                <Icon
+                  size={20}
+                  color={isActive ? Colors.blueLight : Colors.textMuted}
+                  strokeWidth={isActive ? 2.2 : 1.6}
+                />
+              </View>
+              <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
                 {tab.label}
               </Text>
             </TouchableOpacity>
-          ))}
-        </ScrollView>
+          );
+        })}
       </View>
     </SafeAreaView>
   );
 }
 
-function renderScreen(activeTab: TabKey, onSignedOut: () => void) {
+function renderScreen(
+  activeTab: TabKey,
+  onSignedOut: () => void,
+  onNavigateTab: (tab: TabKey) => void,
+) {
   switch (activeTab) {
     case 'faculty':
       return <FacultyManagementScreen />;
@@ -77,7 +102,7 @@ function renderScreen(activeTab: TabKey, onSignedOut: () => void) {
     case 'profile':
       return <ProfileScreen onSignedOut={onSignedOut} />;
     default:
-      return <DashboardScreen />;
+      return <DashboardScreen onNavigateTab={onNavigateTab} />;
   }
 }
 
@@ -110,34 +135,38 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.surfaceAlt,
   },
-  tabShell: {
+  tabBar: {
+    flexDirection: 'row',
     backgroundColor: Colors.navy,
     borderTopWidth: 1,
     borderTopColor: Colors.navyLight,
+    paddingTop: 6,
   },
-  tabs: {
-    gap: 8,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 12,
-  },
-  tab: {
+  tabItem: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: Radius.sm,
-    minWidth: 84,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 8,
-    height: 36,
+    gap: 3,
+    paddingVertical: 4,
   },
-  activeTab: {
-    backgroundColor: Colors.navyLight,
+  tabIconWrap: {
+    width: 40,
+    height: 28,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  tabText: {
-    color: Colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
+  tabIconWrapActive: {
+    backgroundColor: 'rgba(59, 163, 255, 0.12)',
   },
-  activeTabText: {
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    letterSpacing: 0.1,
+  },
+  tabLabelActive: {
     color: Colors.blueLight,
+    fontWeight: '700',
   },
 });

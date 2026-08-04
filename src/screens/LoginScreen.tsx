@@ -1,5 +1,7 @@
+import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppButton } from '../components/AppButton';
 import { FormField } from '../components/FormField';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
@@ -32,41 +34,44 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
-    >
-      <View style={[styles.panel, Shadow.md]}>
-        <Image
-          source={require('@/assets/images/logo.png')}
-          style={styles.logo}
-          resizeMode="contain"
-        />
-        <Text style={styles.title}>Lab Access Admin</Text>
-        <Text style={styles.subtitle}>Administrator Sign In</Text>
-        
-        <View style={styles.formContainer}>
-          <FormField
-            autoCapitalize="none"
-            keyboardType="email-address"
-            label="Username / Email"
-            onChangeText={setUsername}
-            placeholder="admin"
-            value={username}
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="light" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.container}
+      >
+        <View style={[styles.panel, Shadow.md]}>
+          <Image
+            source={require('@/assets/images/logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
           />
-          <FormField
-            label="Password"
-            onChangeText={setPassword}
-            placeholder="Enter password"
-            secureTextEntry
-            value={password}
-          />
-          <View style={styles.buttonWrapper}>
-            <AppButton label="Sign In" loading={loading} onPress={submit} />
+          <Text style={styles.title}>Lab Access Admin</Text>
+          <Text style={styles.subtitle}>Administrator Sign In</Text>
+          
+          <View style={styles.formContainer}>
+            <FormField
+              autoCapitalize="none"
+              keyboardType="email-address"
+              label="Username / Email"
+              onChangeText={setUsername}
+              placeholder="admin"
+              value={username}
+            />
+            <FormField
+              label="Password"
+              onChangeText={setPassword}
+              placeholder="Enter password"
+              secureTextEntry
+              value={password}
+            />
+            <View style={styles.buttonWrapper}>
+              <AppButton label="Sign In" loading={loading} onPress={submit} />
+            </View>
           </View>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -75,6 +80,10 @@ function getErrorMessage(error: unknown) {
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.navyDark,
+  },
   container: {
     backgroundColor: Colors.navyDark,
     flex: 1,
