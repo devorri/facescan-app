@@ -46,7 +46,7 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
             style={styles.logo}
             resizeMode="contain"
           />
-          <Text style={styles.title}>Lab Access Admin</Text>
+          <Text style={styles.title}>CCS Smartlab Access</Text>
           <Text style={styles.subtitle}>Administrator Sign In</Text>
           
           <View style={styles.formContainer}>
