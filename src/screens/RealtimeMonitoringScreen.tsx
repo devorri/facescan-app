@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ShieldAlert, Unlock } from 'lucide-react-native';
+import { ForceDoorUnlockModal } from '../components/ForceDoorUnlockModal';
 import { ScreenState } from '../components/ScreenState';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import {
@@ -9,11 +11,16 @@ import {
 } from '../services/accessLogService';
 import type { AccessLogWithRelations } from '../types/database';
 
-export function RealtimeMonitoringScreen() {
+type RealtimeMonitoringScreenProps = {
+  adminUsername?: string;
+};
+
+export function RealtimeMonitoringScreen({ adminUsername = 'admin' }: RealtimeMonitoringScreenProps) {
   const [logs, setLogs] = useState<AccessLogWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [forceUnlockVisible, setForceUnlockVisible] = useState(false);
 
   const loadLogs = useCallback(async () => {
     setError(null);
@@ -57,40 +64,63 @@ export function RealtimeMonitoringScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.heading}>Real-Time Monitor</Text>
-          <Text style={styles.subheading}>Live stream of laboratory entry scans</Text>
+    <>
+      <View style={styles.container}>
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.heading}>Real-Time Monitor</Text>
+            <Text style={styles.subheading}>Live stream of laboratory entry scans</Text>
+          </View>
+          <View style={styles.headerRight}>
+            <View style={styles.liveIndicator}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          </View>
         </View>
-        <View style={styles.liveIndicator}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>LIVE</Text>
-        </View>
-      </View>
-      
-      {error && (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>⚠️ {error}</Text>
-        </View>
-      )}
 
-      <FlatList
-        data={logs}
-        keyExtractor={(item) => item.id}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.blue} />}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-        ListEmptyComponent={<ScreenState message="No access attempts recorded yet" />}
-        renderItem={({ item }) => <AccessLogRow log={item} />}
-        contentContainerStyle={styles.list}
+        {/* Quick Door Force Trigger Button in Monitoring */}
+        <TouchableOpacity
+          style={styles.monitorForceBtn}
+          onPress={() => setForceUnlockVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Unlock size={16} color="#FFFFFF" strokeWidth={2.5} />
+          <Text style={styles.monitorForceBtnText}>Force Door Access (Camera Verified)</Text>
+        </TouchableOpacity>
+
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>⚠️ {error}</Text>
+          </View>
+        )}
+
+        <FlatList
+          data={logs}
+          keyExtractor={(item) => item.id}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={Colors.blue} />}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ListEmptyComponent={<ScreenState message="No access attempts recorded yet" />}
+          renderItem={({ item }) => <AccessLogRow log={item} />}
+          contentContainerStyle={styles.list}
+        />
+      </View>
+
+      <ForceDoorUnlockModal
+        visible={forceUnlockVisible}
+        onClose={() => setForceUnlockVisible(false)}
+        adminUsername={adminUsername}
+        onUnlocked={() => {
+          loadLogs();
+        }}
       />
-    </View>
+    </>
   );
 }
 
 function AccessLogRow({ log }: { log: AccessLogWithRelations }) {
   const granted = log.decision === 'granted';
-  const facultyName = log.profiles?.name ?? 'Unknown Faculty';
+  const facultyName = log.profiles?.name ?? (log.reason?.includes('Manual') ? 'Admin Manual Override' : 'Unknown Faculty');
   const labName = log.laboratories?.name ?? 'CCS Laboratory';
 
   return (
@@ -126,7 +156,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.md,
+  },
+  headerRight: {
+    alignItems: 'flex-end',
   },
   heading: {
     color: Colors.textPrimary,
@@ -163,6 +196,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  monitorForceBtn: {
+    backgroundColor: '#0F766E',
+    borderRadius: Radius.md,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
+  },
+  monitorForceBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
   errorBox: {
     backgroundColor: Colors.dangerBg,

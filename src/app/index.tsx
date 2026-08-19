@@ -2,7 +2,15 @@ import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Activity, CalendarDays, ClipboardList, LayoutDashboard, type LucideIcon, UserCircle, Users } from 'lucide-react-native';
+import {
+  Activity,
+  CalendarDays,
+  ClipboardList,
+  LayoutDashboard,
+  type LucideIcon,
+  UserCircle,
+  Users,
+} from 'lucide-react-native';
 import { Colors, Radius, Spacing } from '@/constants/design';
 import { AccessRecordsScreen } from '@/screens/AccessRecordsScreen';
 import { DashboardScreen } from '@/screens/DashboardScreen';
@@ -11,6 +19,7 @@ import { LaboratorySchedulingScreen } from '@/screens/LaboratorySchedulingScreen
 import { LoginScreen } from '@/screens/LoginScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { RealtimeMonitoringScreen } from '@/screens/RealtimeMonitoringScreen';
+import type { AdminUser } from '@/services/authService';
 
 type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'monitoring' | 'profile';
 
@@ -25,13 +34,16 @@ const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
 
 export default function AdminApp() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
   const insets = useSafeAreaInsets();
 
-  if (!isLoggedIn) {
+  if (!currentAdmin) {
     return (
       <LoginScreen
-        onSignedIn={() => setIsLoggedIn(true)}
+        onSignedIn={(admin) => {
+          setCurrentAdmin(admin);
+          setActiveTab('dashboard');
+        }}
       />
     );
   }
@@ -39,23 +51,52 @@ export default function AdminApp() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar style="light" />
+      {/* ── Dual-Brand Header ── */}
       <View style={styles.header}>
-        <Image
-          source={require('@/assets/images/logo.png')}
-          style={styles.headerLogo}
-          resizeMode="contain"
-        />
-        <Text style={styles.title}>CCS Smartlab Access</Text>
+        <View style={styles.headerLeft}>
+          <View style={styles.logoBadge}>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          </View>
+          <View style={styles.logoBadge}>
+            <Image
+              source={require('@/assets/images/pampanga-logo.png')}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          </View>
+          <View style={styles.titleWrap}>
+            <Text style={styles.title}>CCS Smartlab</Text>
+            <Text style={styles.headerSub}>Province of Pampanga</Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.profileChip}
+          onPress={() => setActiveTab('profile')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.profileDot} />
+          <Text style={styles.profileChipText}>@{currentAdmin.username}</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.content}>
         {renderScreen(
           activeTab,
-          () => { setIsLoggedIn(false); setActiveTab('dashboard'); },
-          (tab) => setActiveTab(tab)
+          () => {
+            setCurrentAdmin(null);
+            setActiveTab('dashboard');
+          },
+          (tab) => setActiveTab(tab),
+          currentAdmin.username,
         )}
       </View>
 
+      {/* ── Bottom Tab Navigation Bar ── */}
       <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.key;
@@ -89,6 +130,7 @@ function renderScreen(
   activeTab: TabKey,
   onSignedOut: () => void,
   onNavigateTab: (tab: TabKey) => void,
+  adminUsername: string,
 ) {
   switch (activeTab) {
     case 'faculty':
@@ -98,11 +140,11 @@ function renderScreen(
     case 'records':
       return <AccessRecordsScreen />;
     case 'monitoring':
-      return <RealtimeMonitoringScreen />;
+      return <RealtimeMonitoringScreen adminUsername={adminUsername} />;
     case 'profile':
-      return <ProfileScreen onSignedOut={onSignedOut} />;
+      return <ProfileScreen onSignedOut={onSignedOut} adminUsername={adminUsername} />;
     default:
-      return <DashboardScreen onNavigateTab={onNavigateTab} />;
+      return <DashboardScreen onNavigateTab={onNavigateTab} adminUsername={adminUsername} />;
   }
 }
 
@@ -114,22 +156,69 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.sm,
-    paddingTop: Spacing.sm,
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: Colors.navyLight,
+    backgroundColor: Colors.navyDark,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  logoBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   headerLogo: {
-    width: 36,
-    height: 36,
+    width: '100%',
+    height: '100%',
+  },
+  titleWrap: {
+    marginLeft: 2,
   },
   title: {
     color: Colors.textWhite,
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: '800',
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
+  },
+  headerSub: {
+    color: Colors.blueLight,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  profileChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(59, 163, 255, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 163, 255, 0.25)',
+  },
+  profileDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.success,
+  },
+  profileChipText: {
+    color: Colors.textWhite,
+    fontSize: 11,
+    fontWeight: '700',
   },
   content: {
     flex: 1,
