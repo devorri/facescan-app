@@ -1,0 +1,10 @@
+# EAS Ignore
+node_modules
+.git
+.expo
+dist
+web-build
+*.log
+# Root duplicates that bloat upload size
+/bg-facescan.png
+/pampanga-logo.png
