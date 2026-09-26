@@ -33,9 +33,87 @@ function toDbTime(hhmm: string): string {
   return hhmm.length === 5 ? `${hhmm}:00` : hhmm;
 }
 
+function timeStrToMinutes(timeStr: string): number {
+  const [h, m] = timeStr.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+export function formatScheduleTime(timeStr: string): string {
+  const [h, m] = timeStr.split(':').map(Number);
+  if (isNaN(h) || isNaN(m)) return timeStr;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+export async function checkScheduleConflict(input: {
+  facultyId: string;
+  laboratoryId: string;
+  dayOfWeek: string;
+  startTime: string; // "HH:MM"
+  endTime: string;   // "HH:MM"
+  excludeId?: string;
+}): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('schedules')
+    .select(
+      `
+        id,
+        faculty_id,
+        laboratory_id,
+        day_of_week,
+        start_time,
+        end_time,
+        profiles:faculty_id(name),
+        laboratories:laboratory_id(name)
+      `,
+    )
+    .eq('day_of_week', input.dayOfWeek);
+
+  if (error || !data) return null;
+
+  const newStart = timeStrToMinutes(input.startTime);
+  const newEnd = timeStrToMinutes(input.endTime);
+
+  for (const row of data as any[]) {
+    if (input.excludeId && row.id === input.excludeId) continue;
+
+    const rowStart = timeStrToMinutes(row.start_time);
+    const rowEnd = timeStrToMinutes(row.end_time);
+
+    // Check interval overlap: [newStart, newEnd) with [rowStart, rowEnd)
+    if (newStart < rowEnd && newEnd > rowStart) {
+      const timeSpan = `${formatScheduleTime(row.start_time)} – ${formatScheduleTime(row.end_time)}`;
+      const profName = (row.profiles as any)?.name ?? 'Another instructor';
+      const labName = (row.laboratories as any)?.name ?? 'This laboratory';
+
+      if (row.laboratory_id === input.laboratoryId) {
+        return `${labName} is already booked on ${input.dayOfWeek} (${timeSpan}) by ${profName}.`;
+      }
+      if (row.faculty_id === input.facultyId) {
+        return `${profName} already has a schedule in ${labName} on ${input.dayOfWeek} (${timeSpan}).`;
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function createSchedule(input: CreateScheduleInput): Promise<Schedule> {
   if (input.startTime >= input.endTime) {
     throw new Error('End time must be after start time.');
+  }
+
+  const conflict = await checkScheduleConflict({
+    facultyId: input.facultyId,
+    laboratoryId: input.laboratoryId,
+    dayOfWeek: input.dayOfWeek,
+    startTime: input.startTime,
+    endTime: input.endTime,
+  });
+
+  if (conflict) {
+    throw new Error(conflict);
   }
 
   const { data, error } = await supabase
@@ -80,6 +158,19 @@ export async function listSchedules(): Promise<ScheduleWithRelations[]> {
 export async function updateSchedule(input: UpdateScheduleInput): Promise<Schedule> {
   if (input.startTime >= input.endTime) {
     throw new Error('End time must be after start time.');
+  }
+
+  const conflict = await checkScheduleConflict({
+    facultyId: input.facultyId,
+    laboratoryId: input.laboratoryId,
+    dayOfWeek: input.dayOfWeek,
+    startTime: input.startTime,
+    endTime: input.endTime,
+    excludeId: input.id,
+  });
+
+  if (conflict) {
+    throw new Error(conflict);
   }
 
   const { data, error } = await supabase

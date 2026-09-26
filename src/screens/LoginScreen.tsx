@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#050B18',
   },
   darkOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(5, 11, 24, 0.88)',
   },
   safeArea: {

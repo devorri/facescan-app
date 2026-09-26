@@ -315,7 +315,7 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
               <Clock size={16} color={Colors.blue} strokeWidth={2} />
               <Text style={styles.infoLabel}>Hours</Text>
             </View>
-            <Text style={styles.infoValue}>7:00 AM – 5:00 PM</Text>
+            <Text style={styles.infoValue}>7:00 AM – 7:00 PM</Text>
           </View>
 
           <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
@@ -399,7 +399,7 @@ const styles = StyleSheet.create({
     opacity: 0.28,
   },
   heroOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(5, 11, 24, 0.85)',
   },
   heroContent: {

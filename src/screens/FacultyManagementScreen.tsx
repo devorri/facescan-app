@@ -1,4 +1,3 @@
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import {
@@ -23,7 +22,6 @@ import {
   checkPiCameraStatus,
   createFaculty,
   deleteFaculty,
-  enrollFacultyFace,
   enrollFacultyFaceViaPi,
   getPiModeFromDatabase,
   listFaculty,
@@ -36,30 +34,23 @@ import type { Profile } from '../types/database';
 const ITEMS_PER_PAGE = 10;
 
 export function FacultyManagementScreen() {
-  const cameraRef = useRef<CameraView>(null);
-  const [permission, requestPermission] = useCameraPermissions();
   const [faculty, setFaculty] = useState<Profile[]>([]);
   const [selectedFaculty, setSelectedFaculty] = useState<Profile | null>(null);
   const [name, setName] = useState('');
   const [role, setRole] = useState('faculty');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [enrolling, setEnrolling] = useState(false);
   const [piIp, setPiIp] = useState('192.168.100.19');
   const [enrollingPi, setEnrollingPi] = useState(false);
-  const [checkingStatus, setCheckingStatus] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [piStatus, setPiStatus] = useState<PiStatus | null>(null);
   const [currentMode, setCurrentMode] = useState<string>('recognition');
   const [changingMode, setChangingMode] = useState(false);
-  const [debugInfo, setDebugInfo] = useState<string>('');
   // Enrollment status tracking
   const [enrollmentStatus, setEnrollmentStatus] = useState<string>('idle');
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // UI collapse states
   const [cameraExpanded, setCameraExpanded] = useState(false);
-  const [showPhoneFallback, setShowPhoneFallback] = useState(false);
-  const [showDebug, setShowDebug] = useState(false);
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -111,49 +102,7 @@ export function FacultyManagementScreen() {
     };
   }, []);
 
-  const debugDatabase = async () => {
-    try {
-      console.log('🔍 Debugging database...');
 
-      const { data: labs, error: labsError } = await supabase
-        .from('laboratories')
-        .select('*');
-
-      if (labsError) {
-        console.error('❌ Labs error:', labsError);
-        setDebugInfo(`Error: ${labsError.message}`);
-        return;
-      }
-
-      console.log('📡 All laboratories:', JSON.stringify(labs, null, 2));
-
-      if (labs && labs.length > 0) {
-        const lab = labs[0];
-        let statusMsg = `Lab: ${lab.name}\n`;
-        statusMsg += `Mode: ${lab.mode}\n`;
-        statusMsg += `Pi Status: ${JSON.stringify(lab.pi_status, null, 2)}`;
-        setDebugInfo(statusMsg);
-
-        if (lab.pi_status) {
-          let ps = lab.pi_status;
-          if (typeof ps === 'string') {
-            try {
-              ps = JSON.parse(ps);
-            } catch (e) {
-              console.error('Failed to parse pi_status:', e);
-            }
-          }
-          console.log('📡 camera_ready:', ps?.camera_ready);
-          console.log('📡 face_detected:', ps?.face_detected);
-        }
-      } else {
-        setDebugInfo('No laboratories found in database!');
-      }
-    } catch (error: any) {
-      console.error('❌ Debug error:', error);
-      setDebugInfo(`Error: ${error?.message || String(error)}`);
-    }
-  };
 
   const resetForm = () => {
     setSelectedFaculty(null);
@@ -221,7 +170,6 @@ export function FacultyManagementScreen() {
 
   // Poll Pi status
   const pollStatus = useCallback(async () => {
-    setCheckingStatus(true);
     try {
       console.log('🔍 Polling Pi status from app...');
       const status = await checkPiCameraStatus(piIp);
@@ -268,8 +216,6 @@ export function FacultyManagementScreen() {
     } catch (error) {
       console.error('❌ Polling error:', error);
       setPiStatus({ online: false, cameraReady: false, faceDetected: false, message: 'Server unreachable', mode: 'unknown' });
-    } finally {
-      setCheckingStatus(false);
     }
   }, [piIp, selectedFaculty]);
 
@@ -348,45 +294,7 @@ export function FacultyManagementScreen() {
     }
   };
 
-  const captureAndEnroll = async () => {
-    if (!selectedFaculty) {
-      Alert.alert('Select faculty', 'Save or select a faculty member before face enrollment.');
-      return;
-    }
 
-    if (!permission?.granted) {
-      const result = await requestPermission();
-      if (!result.granted) {
-        Alert.alert('Camera permission required', 'Camera access is needed for face enrollment.');
-        return;
-      }
-    }
-
-    setEnrolling(true);
-    try {
-      const photo = await cameraRef.current?.takePictureAsync({
-        base64: true,
-        quality: 0.75,
-        skipProcessing: false,
-      });
-
-      if (!photo?.base64) {
-        throw new Error('No camera image was captured.');
-      }
-
-      const updated = await enrollFacultyFace(
-        selectedFaculty.id,
-        `data:image/jpeg;base64,${photo.base64}`,
-      );
-      setSelectedFaculty(updated);
-      await loadFaculty();
-      Alert.alert('Facial data saved', 'Face embedding has been registered or updated.');
-    } catch (error) {
-      Alert.alert('Face enrollment failed', getErrorMessage(error));
-    } finally {
-      setEnrolling(false);
-    }
-  };
 
   const getEnrollmentStatusDisplay = () => {
     switch (enrollmentStatus) {
@@ -555,75 +463,7 @@ export function FacultyManagementScreen() {
             />
           </View>
 
-          {/* Phone camera fallback - collapsed */}
-          <TouchableOpacity
-            style={styles.fallbackToggle}
-            onPress={() => setShowPhoneFallback(!showPhoneFallback)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.fallbackToggleText}>Phone Camera Fallback</Text>
-            {showPhoneFallback
-              ? <ChevronUp size={16} color={Colors.textMuted} strokeWidth={2} />
-              : <ChevronDown size={16} color={Colors.textMuted} strokeWidth={2} />
-            }
-          </TouchableOpacity>
 
-          {showPhoneFallback && (
-            <View style={styles.fallbackContent}>
-              {permission?.granted ? (
-                <CameraView ref={cameraRef} facing="front" style={styles.camera} />
-              ) : (
-                <View style={styles.permissionBox}>
-                  <Text style={styles.muted}>Camera permission is needed for phone face enrollment.</Text>
-                  <AppButton label="Allow Camera Access" variant="secondary" onPress={requestPermission} />
-                </View>
-              )}
-              <AppButton
-                label="Capture via Phone Camera"
-                variant="secondary"
-                disabled={!selectedFaculty}
-                loading={enrolling}
-                onPress={captureAndEnroll}
-              />
-            </View>
-          )}
-
-          {/* Debug - hidden behind toggle (long press title to reveal) */}
-          <TouchableOpacity
-            style={styles.fallbackToggle}
-            onPress={() => setShowDebug(!showDebug)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.fallbackToggleText}>Debug Tools</Text>
-            {showDebug
-              ? <ChevronUp size={16} color={Colors.textMuted} strokeWidth={2} />
-              : <ChevronDown size={16} color={Colors.textMuted} strokeWidth={2} />
-            }
-          </TouchableOpacity>
-
-          {showDebug && (
-            <View style={styles.debugContainer}>
-              <AppButton
-                label="Debug Database Status"
-                variant="secondary"
-                onPress={debugDatabase}
-              />
-              <AppButton
-                label={checkingStatus ? 'Checking…' : 'Refresh Status'}
-                variant="secondary"
-                loading={checkingStatus}
-                onPress={pollStatus}
-              />
-              {debugInfo !== '' && (
-                <View style={styles.debugBox}>
-                  <Text style={styles.debugText}>{debugInfo}</Text>
-                </View>
-              )}
-              {piStatus?.message && (
-                <Text style={styles.statusMessage}>{piStatus.message}</Text>
-              )}
-            </View>
-          )}
         </View>
       )}
 
@@ -900,62 +740,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // ── Fallback toggle ────────────────────────
-  fallbackToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  fallbackToggleText: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  fallbackContent: {
-    gap: Spacing.md,
-  },
-  camera: {
-    aspectRatio: 3 / 4,
-    borderRadius: Radius.md,
-    overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: Colors.border,
-  },
-  permissionBox: {
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: Radius.md,
-    gap: Spacing.md,
-    padding: Spacing.lg,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
 
-  // ── Debug ──────────────────────────────────
-  debugContainer: {
-    gap: Spacing.sm,
-  },
-  debugBox: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: Radius.sm,
-    padding: Spacing.sm,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  debugText: {
-    color: '#00ff00',
-    fontSize: 11,
-    fontFamily: 'monospace',
-  },
-  statusMessage: {
-    color: Colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
 
   // ── Faculty list ───────────────────────────
   sectionTitle: {

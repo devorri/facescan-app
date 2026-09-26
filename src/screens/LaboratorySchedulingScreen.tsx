@@ -39,7 +39,7 @@ const DAY_OPTIONS = DAYS_OF_WEEK.map((d) => ({ label: d, value: d }));
 
 /** Operating hour bounds (24-h minutes from midnight) */
 const MIN_MINUTES = 7 * 60;   // 7:00 AM
-const MAX_MINUTES = 17 * 60;  // 5:00 PM
+const MAX_MINUTES = 19 * 60;  // 7:00 PM (19:00)
 
 // Day abbreviations for compact badges
 const DAY_SHORT: Record<string, string> = {
@@ -58,6 +58,11 @@ function parseDbTime(timeStr: string): Date {
   const d = new Date();
   d.setHours(h ?? 7, m ?? 0, 0, 0);
   return d;
+}
+
+function timeStrToMinutes(timeStr: string): number {
+  const [h, m] = timeStr.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
 }
 
 function dateToHHMM(date: Date): string {
@@ -98,10 +103,10 @@ function validateWindow(start: Date, end: Date): string | null {
   const endMins   = end.getHours()   * 60 + end.getMinutes();
 
   if (startMins < MIN_MINUTES || startMins > MAX_MINUTES) {
-    return 'Start time must be within operating hours (7:00 AM – 5:00 PM).';
+    return 'Start time must be within operating hours (7:00 AM – 7:00 PM).';
   }
   if (endMins < MIN_MINUTES || endMins > MAX_MINUTES) {
-    return 'End time must be within operating hours (7:00 AM – 5:00 PM).';
+    return 'End time must be within operating hours (7:00 AM – 7:00 PM).';
   }
   if (endMins <= startMins) {
     return 'End time must be after start time.';
@@ -225,6 +230,42 @@ export function LaboratorySchedulingScreen() {
       return;
     }
 
+    const newStartMins = startTime.getHours() * 60 + startTime.getMinutes();
+    const newEndMins = endTime.getHours() * 60 + endTime.getMinutes();
+
+    // Check for overlapping schedule conflicts on the same day
+    for (const s of schedules) {
+      if (selectedSchedule && s.id === selectedSchedule.id) continue;
+      if (s.day_of_week !== dayOfWeek) continue;
+
+      const sStartMins = timeStrToMinutes(s.start_time);
+      const sEndMins = timeStrToMinutes(s.end_time);
+
+      if (newStartMins < sEndMins && newEndMins > sStartMins) {
+        const timeRange = `${formatDbTime(s.start_time)} – ${formatDbTime(s.end_time)}`;
+
+        if (s.laboratory_id === laboratoryId) {
+          const labName = s.laboratories?.name || 'This laboratory';
+          const profName = s.profiles?.name || 'another instructor';
+          Alert.alert(
+            'Laboratory Room Conflict',
+            `${labName} is already scheduled on ${dayOfWeek} from ${timeRange} by ${profName}.\n\nPlease choose a different time slot or laboratory room.`,
+          );
+          return;
+        }
+
+        if (s.faculty_id === facultyId) {
+          const labName = s.laboratories?.name || 'another laboratory';
+          const profName = s.profiles?.name || 'This faculty member';
+          Alert.alert(
+            'Faculty Schedule Conflict',
+            `${profName} is already assigned to ${labName} on ${dayOfWeek} from ${timeRange}.\n\nA faculty member cannot be scheduled in two places at the same time.`,
+          );
+          return;
+        }
+      }
+    }
+
     setSaving(true);
     try {
       const input = {
@@ -300,7 +341,7 @@ export function LaboratorySchedulingScreen() {
         {/* Operating hours info */}
         <View style={styles.infoChip}>
           <Clock size={13} color={Colors.textSecondary} strokeWidth={2} />
-          <Text style={styles.infoText}>Mon – Sat  ·  7:00 AM – 5:00 PM</Text>
+          <Text style={styles.infoText}>Mon – Sat  ·  7:00 AM – 7:00 PM</Text>
         </View>
 
         {/* Day-grouped schedule list */}
