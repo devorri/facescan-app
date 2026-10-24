@@ -128,6 +128,7 @@ export type Database = {
           decision: AccessDecision;
           reason: string | null;
           created_at: string;
+          exited_at?: string | null;
         };
         Insert: {
           id?: string;
@@ -136,12 +137,14 @@ export type Database = {
           decision: AccessDecision;
           reason?: string | null;
           created_at?: string;
+          exited_at?: string | null;
         };
         Update: {
           faculty_id?: string | null;
           laboratory_id?: string | null;
           decision?: AccessDecision;
           reason?: string | null;
+          exited_at?: string | null;
         };
         Relationships: [
           {

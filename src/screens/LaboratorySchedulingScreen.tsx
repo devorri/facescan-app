@@ -1,4 +1,4 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -74,6 +74,14 @@ function dateToHHMM(date: Date): string {
 function formatDbTime(timeStr: string): string {
   const [h, m] = timeStr.split(':').map(Number);
   if (isNaN(h) || isNaN(m)) return timeStr;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+function formatDisplayTime(date: Date): string {
+  const h = date.getHours();
+  const m = date.getMinutes();
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 || 12;
   return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
@@ -214,8 +222,37 @@ export function LaboratorySchedulingScreen() {
   };
 
   const closeForm = () => {
+    if (Platform.OS === 'android') {
+      try {
+        DateTimePickerAndroid.dismiss('time');
+      } catch {
+        // Safe to ignore if not open
+      }
+    }
     setFormOpen(false);
     resetForm();
+  };
+
+  const openAndroidTimePicker = (target: 'start' | 'end') => {
+    if (Platform.OS !== 'android') return;
+    const isStart = target === 'start';
+    const currentTime = isStart ? startTime : endTime;
+
+    DateTimePickerAndroid.open({
+      value: currentTime,
+      mode: 'time',
+      is24Hour: false,
+      onChange: (event, selectedDate) => {
+        if (event.type === 'set' && selectedDate) {
+          if (isStart) {
+            setStartTime(selectedDate);
+          } else {
+            setEndTime(selectedDate);
+          }
+        }
+        // If event.type === 'dismissed' (Cancel clicked), Android dialog cleanly closes
+      },
+    });
   };
 
   const saveSchedule = async () => {
@@ -451,26 +488,92 @@ export function LaboratorySchedulingScreen() {
             <View style={styles.formTimeRow}>
               <View style={styles.formTimeBlock}>
                 <Text style={styles.formTimeLabel}>Start Time</Text>
-                <DateTimePicker
-                  value={startTime}
-                  mode="time"
-                  is24Hour={false}
-                  display={Platform.OS === 'ios' ? 'compact' : 'default'}
-                  onChange={(_, selected) => selected && setStartTime(selected)}
-                />
+                {Platform.OS === 'ios' ? (
+                  <DateTimePicker
+                    value={startTime}
+                    mode="time"
+                    display="compact"
+                    onChange={(_, selected) => selected && setStartTime(selected)}
+                  />
+                ) : (
+                  <TouchableOpacity
+                    style={styles.timeTrigger}
+                    onPress={() => openAndroidTimePicker('start')}
+                    activeOpacity={0.7}
+                  >
+                    <Clock size={16} color={Colors.blue} strokeWidth={2} />
+                    <Text style={styles.timeTriggerText}>{formatDisplayTime(startTime)}</Text>
+                    {Platform.OS === 'web' && (
+                      <input
+                        type="time"
+                        value={dateToHHMM(startTime)}
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setStartTime(parseDbTime(e.target.value));
+                          }
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          opacity: 0,
+                          cursor: 'pointer',
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      />
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
+
               <View style={styles.formTimeSep}>
                 <Text style={styles.formTimeSepText}>→</Text>
               </View>
+
               <View style={styles.formTimeBlock}>
                 <Text style={styles.formTimeLabel}>End Time</Text>
-                <DateTimePicker
-                  value={endTime}
-                  mode="time"
-                  is24Hour={false}
-                  display={Platform.OS === 'ios' ? 'compact' : 'default'}
-                  onChange={(_, selected) => selected && setEndTime(selected)}
-                />
+                {Platform.OS === 'ios' ? (
+                  <DateTimePicker
+                    value={endTime}
+                    mode="time"
+                    display="compact"
+                    onChange={(_, selected) => selected && setEndTime(selected)}
+                  />
+                ) : (
+                  <TouchableOpacity
+                    style={styles.timeTrigger}
+                    onPress={() => openAndroidTimePicker('end')}
+                    activeOpacity={0.7}
+                  >
+                    <Clock size={16} color={Colors.blue} strokeWidth={2} />
+                    <Text style={styles.timeTriggerText}>{formatDisplayTime(endTime)}</Text>
+                    {Platform.OS === 'web' && (
+                      <input
+                        type="time"
+                        value={dateToHHMM(endTime)}
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setEndTime(parseDbTime(e.target.value));
+                          }
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          opacity: 0,
+                          cursor: 'pointer',
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      />
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
 
@@ -748,6 +851,24 @@ const styles = StyleSheet.create({
   formTimeSepText: {
     color: Colors.textMuted,
     fontSize: 18,
+    fontWeight: '700',
+  },
+  timeTrigger: {
+    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+  },
+  timeTriggerText: {
+    color: Colors.textPrimary,
+    fontSize: 14,
     fontWeight: '700',
   },
   formActions: {

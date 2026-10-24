@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FileSpreadsheet, Printer } from 'lucide-react-native';
 import { ScreenState } from '../components/ScreenState';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import { listAccessLogs } from '../services/accessLogService';
 import type { AccessLogWithRelations } from '../types/database';
 
-export function AccessRecordsScreen() {
+export function AccessRecordsScreen({ onNavigateReport }: { onNavigateReport?: () => void }) {
   const [logs, setLogs] = useState<AccessLogWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -36,8 +37,23 @@ export function AccessRecordsScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.heading}>Access History</Text>
-      <Text style={styles.subheading}>Logs of recent laboratory entries</Text>
+      <View style={styles.headerRow}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.heading}>Access History</Text>
+          <Text style={styles.subheading}>Logs of recent laboratory entries</Text>
+        </View>
+
+        {onNavigateReport && (
+          <TouchableOpacity
+            style={[styles.reportBtn, Shadow.sm]}
+            onPress={onNavigateReport}
+            activeOpacity={0.8}
+          >
+            <Printer size={15} color={Colors.textWhite} />
+            <Text style={styles.reportBtnText}>Report</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       {error && (
         <View style={styles.errorBox}>
           <Text style={styles.errorText}>⚠️ {error}</Text>
@@ -106,6 +122,15 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: Spacing.lg,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.lg,
+  },
+  headerLeft: {
+    flex: 1,
+  },
   heading: {
     color: Colors.textPrimary,
     fontSize: 26,
@@ -117,7 +142,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: -2,
-    marginBottom: Spacing.lg,
+  },
+  reportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.navyMid,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+  },
+  reportBtnText: {
+    color: Colors.textWhite,
+    fontSize: 12,
+    fontWeight: '700',
   },
   errorBox: {
     backgroundColor: Colors.dangerBg,

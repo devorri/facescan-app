@@ -15,6 +15,7 @@ import {
   Calendar,
   Clock,
   DoorOpen,
+  FileSpreadsheet,
   KeyRound,
   MapPin,
   ScanFace,
@@ -32,7 +33,7 @@ import { DashboardCounts, getDashboardCounts } from '../services/dashboardServic
 import type { AccessLogWithRelations } from '../types/database';
 
 type DashboardScreenProps = {
-  onNavigateTab?: (tab: 'faculty' | 'schedule' | 'records' | 'monitoring') => void;
+  onNavigateTab?: (tab: 'faculty' | 'schedule' | 'records' | 'reports' | 'monitoring' | 'profile') => void;
   adminUsername?: string;
 };
 
@@ -191,6 +192,17 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
               <Activity size={18} color={Colors.success} strokeWidth={2} />
             </View>
             <Text style={styles.actionChipText}>Live Feed</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionChip}
+            onPress={() => onNavigateTab?.('reports')}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
+              <FileSpreadsheet size={18} color="#D97706" strokeWidth={2} />
+            </View>
+            <Text style={styles.actionChipText}>Reports</Text>
           </TouchableOpacity>
         </View>
 

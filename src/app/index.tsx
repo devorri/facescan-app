@@ -6,6 +6,7 @@ import {
   Activity,
   CalendarDays,
   ClipboardList,
+  FileSpreadsheet,
   LayoutDashboard,
   type LucideIcon,
   UserCircle,
@@ -19,15 +20,17 @@ import { LaboratorySchedulingScreen } from '@/screens/LaboratorySchedulingScreen
 import { LoginScreen } from '@/screens/LoginScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { RealtimeMonitoringScreen } from '@/screens/RealtimeMonitoringScreen';
+import { ReportScreen } from '@/screens/ReportScreen';
 import type { AdminUser } from '@/services/authService';
 
-type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'monitoring' | 'profile';
+type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'reports' | 'monitoring' | 'profile';
 
 const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
   { key: 'dashboard', label: 'Home', icon: LayoutDashboard },
   { key: 'faculty', label: 'Faculty', icon: Users },
   { key: 'schedule', label: 'Schedule', icon: CalendarDays },
   { key: 'records', label: 'Records', icon: ClipboardList },
+  { key: 'reports', label: 'Reports', icon: FileSpreadsheet },
   { key: 'monitoring', label: 'Monitor', icon: Activity },
   { key: 'profile', label: 'Profile', icon: UserCircle },
 ];
@@ -138,7 +141,9 @@ function renderScreen(
     case 'schedule':
       return <LaboratorySchedulingScreen />;
     case 'records':
-      return <AccessRecordsScreen />;
+      return <AccessRecordsScreen onNavigateReport={() => onNavigateTab('reports')} />;
+    case 'reports':
+      return <ReportScreen />;
     case 'monitoring':
       return <RealtimeMonitoringScreen adminUsername={adminUsername} />;
     case 'profile':
