@@ -76,7 +76,7 @@ export async function forceUnlockDoor(
 
   // 2. Transmit unlock signal to the Raspberry Pi hardware controller
   let hardwareTriggered = false;
-  const piIp = (options.piIp || '192.168.100.19').trim();
+  const piIp = (options.piIp || '192.168.110.27').trim();
 
   try {
     const controller = new AbortController();

@@ -21,11 +21,11 @@ import { LoginScreen } from '@/screens/LoginScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { RealtimeMonitoringScreen } from '@/screens/RealtimeMonitoringScreen';
 import { ReportScreen } from '@/screens/ReportScreen';
-import type { AdminUser } from '@/services/authService';
+import type { AuthUser } from '@/services/authService';
 
 type TabKey = 'dashboard' | 'faculty' | 'schedule' | 'records' | 'reports' | 'monitoring' | 'profile';
 
-const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
+const allTabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
   { key: 'dashboard', label: 'Home', icon: LayoutDashboard },
   { key: 'faculty', label: 'Faculty', icon: Users },
   { key: 'schedule', label: 'Schedule', icon: CalendarDays },
@@ -37,19 +37,44 @@ const tabs: Array<{ key: TabKey; label: string; icon: LucideIcon }> = [
 
 export default function AdminApp() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
-  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const insets = useSafeAreaInsets();
 
-  if (!currentAdmin) {
+  if (!currentUser) {
     return (
       <LoginScreen
-        onSignedIn={(admin) => {
-          setCurrentAdmin(admin);
+        onSignedIn={(user) => {
+          setCurrentUser(user);
           setActiveTab('dashboard');
         }}
       />
     );
   }
+
+  // Filter tabs based on role:
+  // Custodian: has full administrative access (Home, Faculty, Schedule, Records, Reports, Monitor, Profile)
+  // Faculty: ONLY sees Home, My Schedule, and Profile (no access to faculty management, audit records, reports, or CCTV monitor)
+  const visibleTabs = allTabs
+    .filter((tab) => {
+      if (currentUser.role === 'custodian') return true;
+      return tab.key === 'dashboard' || tab.key === 'schedule' || tab.key === 'profile';
+    })
+    .map((tab) => {
+      if (currentUser.role === 'faculty' && tab.key === 'schedule') {
+        return { ...tab, label: 'My Schedule' };
+      }
+      return tab;
+    });
+
+  const handleNavigateTab = (tab: TabKey) => {
+    // Prevent faculty from navigating to custodian-only tabs via any action
+    if (currentUser.role === 'faculty') {
+      if (tab !== 'dashboard' && tab !== 'schedule' && tab !== 'profile') {
+        return;
+      }
+    }
+    setActiveTab(tab);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -82,8 +107,28 @@ export default function AdminApp() {
           onPress={() => setActiveTab('profile')}
           activeOpacity={0.7}
         >
-          <View style={styles.profileDot} />
-          <Text style={styles.profileChipText}>@{currentAdmin.username}</Text>
+          <View
+            style={[
+              styles.profileDot,
+              { backgroundColor: currentUser.role === 'custodian' ? Colors.blueLight : '#F59E0B' },
+            ]}
+          />
+          <Text style={styles.profileChipText}>@{currentUser.username}</Text>
+          <View
+            style={[
+              styles.roleBadgeHeader,
+              currentUser.role === 'custodian' ? styles.roleBadgeCustodian : styles.roleBadgeFaculty,
+            ]}
+          >
+            <Text
+              style={[
+                styles.roleBadgeHeaderText,
+                currentUser.role === 'custodian' ? styles.roleTextCustodian : styles.roleTextFaculty,
+              ]}
+            >
+              {currentUser.role === 'custodian' ? 'Custodian' : 'Faculty'}
+            </Text>
+          </View>
         </TouchableOpacity>
       </View>
 
@@ -91,17 +136,17 @@ export default function AdminApp() {
         {renderScreen(
           activeTab,
           () => {
-            setCurrentAdmin(null);
+            setCurrentUser(null);
             setActiveTab('dashboard');
           },
-          (tab) => setActiveTab(tab),
-          currentAdmin.username,
+          handleNavigateTab,
+          currentUser,
         )}
       </View>
 
       {/* ── Bottom Tab Navigation Bar ── */}
       <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const isActive = activeTab === tab.key;
           const Icon = tab.icon;
           return (
@@ -133,23 +178,79 @@ function renderScreen(
   activeTab: TabKey,
   onSignedOut: () => void,
   onNavigateTab: (tab: TabKey) => void,
-  adminUsername: string,
+  currentUser: AuthUser,
 ) {
+  const isCustodian = currentUser.role === 'custodian';
+
   switch (activeTab) {
     case 'faculty':
+      if (!isCustodian) {
+        return (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.textPrimary }}>
+              Custodian Only
+            </Text>
+            <Text style={{ fontSize: 13, color: Colors.textSecondary, textAlign: 'center', maxWidth: 300 }}>
+              Only the Laboratory Custodian can add, edit, or delete faculty credentials and information.
+            </Text>
+          </View>
+        );
+      }
       return <FacultyManagementScreen />;
+
     case 'schedule':
-      return <LaboratorySchedulingScreen />;
+      return <LaboratorySchedulingScreen userRole={currentUser.role} currentUser={currentUser} />;
+
     case 'records':
+      if (!isCustodian) {
+        return (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.textPrimary }}>
+              Custodian Only
+            </Text>
+            <Text style={{ fontSize: 13, color: Colors.textSecondary, textAlign: 'center', maxWidth: 300 }}>
+              Access history and door security records are restricted to the Laboratory Custodian.
+            </Text>
+          </View>
+        );
+      }
       return <AccessRecordsScreen onNavigateReport={() => onNavigateTab('reports')} />;
+
     case 'reports':
+      if (!isCustodian) {
+        return (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.textPrimary }}>
+              Custodian Only
+            </Text>
+            <Text style={{ fontSize: 13, color: Colors.textSecondary, textAlign: 'center', maxWidth: 300 }}>
+              Institutional attendance and punctuality reports are restricted to the Laboratory Custodian.
+            </Text>
+          </View>
+        );
+      }
       return <ReportScreen />;
+
     case 'monitoring':
-      return <RealtimeMonitoringScreen adminUsername={adminUsername} />;
+      if (!isCustodian) {
+        return (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.textPrimary }}>
+              Custodian Only
+            </Text>
+            <Text style={{ fontSize: 13, color: Colors.textSecondary, textAlign: 'center', maxWidth: 300 }}>
+              Real-time laboratory monitoring and camera feeds are restricted to the Laboratory Custodian.
+            </Text>
+          </View>
+        );
+      }
+      return <RealtimeMonitoringScreen currentUser={currentUser} adminUsername={currentUser.username} />;
+
     case 'profile':
-      return <ProfileScreen onSignedOut={onSignedOut} adminUsername={adminUsername} />;
+      return <ProfileScreen onSignedOut={onSignedOut} currentUser={currentUser} adminUsername={currentUser.username} />;
+
     default:
-      return <DashboardScreen onNavigateTab={onNavigateTab} adminUsername={adminUsername} />;
+      return <DashboardScreen onNavigateTab={onNavigateTab} currentUser={currentUser} adminUsername={currentUser.username} />;
   }
 }
 
@@ -224,6 +325,29 @@ const styles = StyleSheet.create({
     color: Colors.textWhite,
     fontSize: 11,
     fontWeight: '700',
+  },
+  roleBadgeHeader: {
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+    marginLeft: 2,
+  },
+  roleBadgeCustodian: {
+    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+  },
+  roleBadgeFaculty: {
+    backgroundColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  roleBadgeHeaderText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  roleTextCustodian: {
+    color: '#93C5FD',
+  },
+  roleTextFaculty: {
+    color: '#FCD34D',
   },
   content: {
     flex: 1,

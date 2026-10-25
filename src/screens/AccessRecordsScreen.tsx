@@ -75,6 +75,11 @@ export function AccessRecordsScreen({ onNavigateReport }: { onNavigateReport?: (
 function AccessRecordRow({ log }: { log: AccessLogWithRelations }) {
   const createdAt = new Date(log.created_at);
   const granted = log.decision === 'granted';
+  const isLate = (log.reason?.toLowerCase().includes('late')) ?? false;
+
+  const badgeStyle = !granted ? styles.deniedBadge : isLate ? styles.lateBadge : styles.grantedBadge;
+  const textStyle = !granted ? styles.deniedText : isLate ? styles.lateText : styles.grantedText;
+  const indicatorColor = !granted ? Colors.danger : isLate ? '#D97706' : Colors.success;
 
   return (
     <View style={[styles.row, Shadow.sm]}>
@@ -83,9 +88,9 @@ function AccessRecordRow({ log }: { log: AccessLogWithRelations }) {
           <Text style={styles.avatar}>👤</Text>
           <Text style={styles.rowTitle}>{log.profiles?.name ?? 'Unknown Faculty'}</Text>
         </View>
-        <View style={[styles.badge, granted ? styles.grantedBadge : styles.deniedBadge]}>
-          <Text style={[styles.badgeText, granted ? styles.grantedText : styles.deniedText]}>
-            {granted ? 'GRANTED' : 'DENIED'}
+        <View style={[styles.badge, badgeStyle]}>
+          <Text style={[styles.badgeText, textStyle]}>
+            {!granted ? 'DENIED' : isLate ? 'LATE' : 'GRANTED'}
           </Text>
         </View>
       </View>
@@ -108,7 +113,7 @@ function AccessRecordRow({ log }: { log: AccessLogWithRelations }) {
           </View>
         )}
       </View>
-      <View style={[styles.sideIndicator, { backgroundColor: granted ? Colors.success : Colors.danger }]} />
+      <View style={[styles.sideIndicator, { backgroundColor: indicatorColor }]} />
     </View>
   );
 }
@@ -242,6 +247,9 @@ const styles = StyleSheet.create({
   grantedBadge: {
     backgroundColor: Colors.successBg,
   },
+  lateBadge: {
+    backgroundColor: '#FEF3C7',
+  },
   deniedBadge: {
     backgroundColor: Colors.dangerBg,
   },
@@ -252,6 +260,9 @@ const styles = StyleSheet.create({
   },
   grantedText: {
     color: Colors.success,
+  },
+  lateText: {
+    color: '#D97706',
   },
   deniedText: {
     color: Colors.danger,

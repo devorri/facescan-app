@@ -7,18 +7,19 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Eye, EyeOff, KeyRound, Lock, ShieldCheck, User } from 'lucide-react-native';
+import { Eye, EyeOff, GraduationCap, KeyRound, Lock, ShieldCheck, User, UserPlus } from 'lucide-react-native';
 import { AppButton } from '../components/AppButton';
 import { FormField } from '../components/FormField';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
-import { changePassword, signOut } from '../services/authService';
+import { changePassword, createAccount, signOut, type AuthUser, type UserRole } from '../services/authService';
 
 type ProfileScreenProps = {
   onSignedOut: () => void;
   adminUsername?: string;
+  currentUser?: AuthUser;
 };
 
-export function ProfileScreen({ onSignedOut, adminUsername = 'admin' }: ProfileScreenProps) {
+export function ProfileScreen({ onSignedOut, adminUsername = 'admin', currentUser }: ProfileScreenProps) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,6 +27,15 @@ export function ProfileScreen({ onSignedOut, adminUsername = 'admin' }: ProfileS
   const [showNew, setShowNew] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+
+  // Custodian Account Creation State
+  const [newAccName, setNewAccName] = useState('');
+  const [newAccUsername, setNewAccUsername] = useState('');
+  const [newAccPassword, setNewAccPassword] = useState('');
+  const [newAccRole, setNewAccRole] = useState<UserRole>('faculty');
+  const [creatingAcc, setCreatingAcc] = useState(false);
+
+  const isCustodian = currentUser?.role === 'custodian' || adminUsername.toLowerCase() === 'admin';
 
   const submitPassword = async () => {
     if (!currentPassword) {
@@ -59,11 +69,56 @@ export function ProfileScreen({ onSignedOut, adminUsername = 'admin' }: ProfileS
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      Alert.alert('Success', 'Admin password has been updated successfully.');
+      Alert.alert('Success', 'Password has been updated successfully.');
     } catch (error) {
       Alert.alert('Unable to change password', getErrorMessage(error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCreateAccount = async () => {
+    if (!newAccName.trim() || !newAccUsername.trim() || !newAccPassword.trim()) {
+      Alert.alert('Missing fields', 'Please enter Name, Username, and Password.');
+      return;
+    }
+    if (newAccPassword.length < 6) {
+      Alert.alert('Weak password', 'Password must be at least 6 characters.');
+      return;
+    }
+
+    setCreatingAcc(true);
+    try {
+      await createAccount({
+        fullName: newAccName.trim(),
+        username: newAccUsername.trim(),
+        password: newAccPassword,
+        role: newAccRole,
+      });
+
+      Alert.alert(
+        'Account Created! ✅',
+        `Successfully registered @${newAccUsername.trim().toLowerCase()} as ${
+          newAccRole === 'custodian' ? 'Laboratory Custodian' : 'Faculty Member'
+        }.`
+      );
+      setNewAccName('');
+      setNewAccUsername('');
+      setNewAccPassword('');
+      setNewAccRole('faculty');
+    } catch (error: any) {
+      const msg = error?.message || 'Unexpected error creating account';
+      if (msg.includes('row-level security') || msg.includes('42501')) {
+        Alert.alert(
+          'Supabase Policy Notice',
+          'Database policy requires insert permission on admins table.\n\nPlease execute in Supabase SQL Editor:\nCREATE POLICY "Allow anon insert on admins" ON public.admins FOR INSERT TO anon WITH CHECK (true);',
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Account Creation Failed', msg);
+      }
+    } finally {
+      setCreatingAcc(false);
     }
   };
 
@@ -81,22 +136,133 @@ export function ProfileScreen({ onSignedOut, adminUsername = 'admin' }: ProfileS
 
   return (
     <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <Text style={styles.heading}>Account Settings</Text>
+      <Text style={styles.heading}>Account & Access</Text>
 
-      {/* ── Admin Info Card ── */}
+      {/* ── User Profile Card ── */}
       <View style={[styles.card, Shadow.sm]}>
-        <View style={styles.avatarBubble}>
-          <User size={24} color={Colors.blue} strokeWidth={2.2} />
+        <View style={[styles.avatarBubble, isCustodian ? styles.avatarCustodian : styles.avatarFaculty]}>
+          {isCustodian ? (
+            <ShieldCheck size={26} color={Colors.blue} strokeWidth={2.2} />
+          ) : (
+            <GraduationCap size={26} color="#D97706" strokeWidth={2.2} />
+          )}
         </View>
         <View style={styles.userInfo}>
-          <Text style={styles.label}>Signed in as</Text>
+          <Text style={styles.label}>Active Session</Text>
           <Text style={styles.email}>@{adminUsername}</Text>
-          <View style={styles.roleBadge}>
-            <ShieldCheck size={12} color={Colors.success} />
-            <Text style={styles.roleBadgeText}>System Administrator</Text>
+          <View
+            style={[
+              styles.roleBadge,
+              isCustodian ? styles.roleBadgeCustodian : styles.roleBadgeFaculty,
+            ]}
+          >
+            {isCustodian ? (
+              <ShieldCheck size={13} color="#1D4ED8" />
+            ) : (
+              <GraduationCap size={13} color="#B45309" />
+            )}
+            <Text
+              style={[
+                styles.roleBadgeText,
+                isCustodian ? styles.roleTextCustodian : styles.roleTextFaculty,
+              ]}
+            >
+              {isCustodian ? 'Laboratory Custodian (Admin)' : 'Faculty Member'}
+            </Text>
           </View>
+          <Text style={styles.privilegeSubtext}>
+            {isCustodian
+              ? 'Unrestricted 24/7 Force Unlock • Schedule Management • Account Creation'
+              : 'Force Door Unlock active only during your scheduled class periods.'}
+          </Text>
         </View>
       </View>
+
+      {/* ── Custodian Only: Register New User Account ── */}
+      {isCustodian && (
+        <View style={[styles.form, Shadow.sm]}>
+          <View style={styles.formHeader}>
+            <UserPlus size={18} color={Colors.blue} strokeWidth={2.2} />
+            <Text style={styles.formTitle}>Register User Account (Custodian Only)</Text>
+          </View>
+          <Text style={styles.sectionSubtitle}>
+            Create login credentials and set access level for faculty or new custodians.
+          </Text>
+
+          <FormField
+            label="Full Name"
+            placeholder="e.g. Engr. Maria Santos"
+            value={newAccName}
+            onChangeText={setNewAccName}
+          />
+
+          <FormField
+            label="Login Username"
+            placeholder="e.g. msantos"
+            value={newAccUsername}
+            onChangeText={setNewAccUsername}
+            autoCapitalize="none"
+          />
+
+          <FormField
+            label="Initial Password"
+            placeholder="At least 6 characters"
+            value={newAccPassword}
+            onChangeText={setNewAccPassword}
+            secureTextEntry
+          />
+
+          {/* Role selector */}
+          <View style={styles.accessLevelWrapper}>
+            <Text style={styles.accessLevelLabel}>Access Level</Text>
+            <View style={styles.accessLevelRow}>
+              <TouchableOpacity
+                style={[
+                  styles.accessLevelBtn,
+                  newAccRole === 'faculty' && styles.accessLevelBtnActiveFaculty,
+                ]}
+                onPress={() => setNewAccRole('faculty')}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.accessLevelText,
+                    newAccRole === 'faculty' && styles.accessLevelTextActiveFaculty,
+                  ]}
+                >
+                  🎓 Faculty
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.accessLevelBtn,
+                  newAccRole === 'custodian' && styles.accessLevelBtnActiveCustodian,
+                ]}
+                onPress={() => setNewAccRole('custodian')}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.accessLevelText,
+                    newAccRole === 'custodian' && styles.accessLevelTextActiveCustodian,
+                  ]}
+                >
+                  🛡️ Custodian
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.buttonWrapper}>
+            <AppButton
+              label="Create User Account"
+              loading={creatingAcc}
+              onPress={handleCreateAccount}
+            />
+          </View>
+        </View>
+      )}
 
       {/* ── Change Password Form ── */}
       <View style={[styles.form, Shadow.sm]}>
@@ -287,5 +453,85 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     flex: 1,
+  },
+  avatarCustodian: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  avatarFaculty: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  roleBadgeCustodian: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  roleBadgeFaculty: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  roleTextCustodian: {
+    color: '#1D4ED8',
+  },
+  roleTextFaculty: {
+    color: '#B45309',
+  },
+  privilegeSubtext: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  sectionSubtitle: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: -Spacing.xs,
+  },
+  accessLevelWrapper: {
+    gap: 6,
+  },
+  accessLevelLabel: {
+    color: Colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  accessLevelRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  accessLevelBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accessLevelBtnActiveFaculty: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#F59E0B',
+  },
+  accessLevelBtnActiveCustodian: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#2563EB',
+  },
+  accessLevelText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  accessLevelTextActiveFaculty: {
+    color: '#B45309',
+  },
+  accessLevelTextActiveCustodian: {
+    color: '#1D4ED8',
   },
 });

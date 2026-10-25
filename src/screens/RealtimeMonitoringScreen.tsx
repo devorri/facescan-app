@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { ShieldAlert, Unlock } from 'lucide-react-native';
 import { ForceDoorUnlockModal } from '../components/ForceDoorUnlockModal';
 import { ScreenState } from '../components/ScreenState';
@@ -9,13 +9,19 @@ import {
   hydrateAccessLog,
   subscribeToAccessLogInserts,
 } from '../services/accessLogService';
+import type { AuthUser } from '../services/authService';
+import { isFacultyScheduledNow } from '../services/scheduleService';
 import type { AccessLogWithRelations } from '../types/database';
 
 type RealtimeMonitoringScreenProps = {
   adminUsername?: string;
+  currentUser?: AuthUser;
 };
 
-export function RealtimeMonitoringScreen({ adminUsername = 'admin' }: RealtimeMonitoringScreenProps) {
+export function RealtimeMonitoringScreen({
+  adminUsername = 'admin',
+  currentUser,
+}: RealtimeMonitoringScreenProps) {
   const [logs, setLogs] = useState<AccessLogWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -52,6 +58,32 @@ export function RealtimeMonitoringScreen({ adminUsername = 'admin' }: RealtimeMo
     };
   }, []);
 
+  const handleForceUnlockPress = async () => {
+    // Custodians have 24/7 unrestricted force unlock access
+    if (!currentUser || currentUser.role === 'custodian') {
+      setForceUnlockVisible(true);
+      return;
+    }
+
+    // Faculty members can ONLY force unlock during their scheduled laboratory time
+    const schedCheck = await isFacultyScheduledNow({
+      facultyId: currentUser.profileId,
+      username: currentUser.username,
+      name: currentUser.name,
+    });
+
+    if (schedCheck.allowed) {
+      setForceUnlockVisible(true);
+    } else {
+      Alert.alert(
+        'Force Unlock Restricted',
+        schedCheck.message ||
+          'Faculty members can only force unlock the door during their scheduled laboratory hours.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
   const refresh = async () => {
     setRefreshing(true);
     loadLogs()
@@ -82,11 +114,13 @@ export function RealtimeMonitoringScreen({ adminUsername = 'admin' }: RealtimeMo
         {/* Quick Door Force Trigger Button in Monitoring */}
         <TouchableOpacity
           style={styles.monitorForceBtn}
-          onPress={() => setForceUnlockVisible(true)}
+          onPress={handleForceUnlockPress}
           activeOpacity={0.8}
         >
           <Unlock size={16} color="#FFFFFF" strokeWidth={2.5} />
-          <Text style={styles.monitorForceBtnText}>Force Door Access (Camera Verified)</Text>
+          <Text style={styles.monitorForceBtnText}>
+            {currentUser?.role === 'faculty' ? 'Faculty Door Override (Active Sched Only)' : 'Force Door Access (Camera Verified)'}
+          </Text>
         </TouchableOpacity>
 
         {error && (
@@ -120,12 +154,17 @@ export function RealtimeMonitoringScreen({ adminUsername = 'admin' }: RealtimeMo
 
 function AccessLogRow({ log }: { log: AccessLogWithRelations }) {
   const granted = log.decision === 'granted';
+  const isLate = (log.reason?.toLowerCase().includes('late')) ?? false;
   const facultyName = log.profiles?.name ?? (log.reason?.includes('Manual') ? 'Admin Manual Override' : 'Unknown Faculty');
   const labName = log.laboratories?.name ?? 'CCS Laboratory';
 
+  const badgeStyle = !granted ? styles.deniedBadge : isLate ? styles.lateBadge : styles.grantedBadge;
+  const textStyle = !granted ? styles.deniedText : isLate ? styles.lateText : styles.grantedText;
+  const indicatorColor = !granted ? Colors.danger : isLate ? '#D97706' : Colors.success;
+
   return (
     <View style={[styles.row, Shadow.sm]}>
-      <View style={[styles.statusIndicator, { backgroundColor: granted ? Colors.success : Colors.danger }]} />
+      <View style={[styles.statusIndicator, { backgroundColor: indicatorColor }]} />
       <View style={styles.rowBody}>
         <View style={styles.nameRow}>
           <Text style={styles.rowTitle}>{facultyName}</Text>
@@ -138,9 +177,9 @@ function AccessLogRow({ log }: { log: AccessLogWithRelations }) {
           </View>
         )}
       </View>
-      <View style={[styles.badge, granted ? styles.grantedBadge : styles.deniedBadge]}>
-        <Text style={[styles.badgeText, granted ? styles.grantedText : styles.deniedText]}>
-          {granted ? 'OK' : 'FAIL'}
+      <View style={[styles.badge, badgeStyle]}>
+        <Text style={[styles.badgeText, textStyle]}>
+          {!granted ? 'FAIL' : isLate ? 'LATE' : 'OK'}
         </Text>
       </View>
     </View>
@@ -290,6 +329,9 @@ const styles = StyleSheet.create({
   grantedBadge: {
     backgroundColor: Colors.successBg,
   },
+  lateBadge: {
+    backgroundColor: '#FEF3C7',
+  },
   deniedBadge: {
     backgroundColor: Colors.dangerBg,
   },
@@ -299,6 +341,9 @@ const styles = StyleSheet.create({
   },
   grantedText: {
     color: Colors.success,
+  },
+  lateText: {
+    color: '#D97706',
   },
   deniedText: {
     color: Colors.danger,

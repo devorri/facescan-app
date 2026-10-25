@@ -37,10 +37,11 @@ export function FacultyManagementScreen() {
   const [faculty, setFaculty] = useState<Profile[]>([]);
   const [selectedFaculty, setSelectedFaculty] = useState<Profile | null>(null);
   const [name, setName] = useState('');
-  const [role, setRole] = useState('faculty');
+  const [accessLevel, setAccessLevel] = useState<'faculty' | 'custodian'>('faculty');
+  const [department, setDepartment] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [piIp, setPiIp] = useState('192.168.100.19');
+  const [piIp, setPiIp] = useState('192.168.110.27');
   const [enrollingPi, setEnrollingPi] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [piStatus, setPiStatus] = useState<PiStatus | null>(null);
@@ -107,7 +108,8 @@ export function FacultyManagementScreen() {
   const resetForm = () => {
     setSelectedFaculty(null);
     setName('');
-    setRole('faculty');
+    setAccessLevel('faculty');
+    setDepartment('');
     setEnrollmentStatus('idle');
     setCameraExpanded(false);
     if (resetTimerRef.current) {
@@ -119,29 +121,39 @@ export function FacultyManagementScreen() {
   const selectFaculty = (profile: Profile) => {
     setSelectedFaculty(profile);
     setName(profile.name);
-    setRole(profile.role);
+    const isCust = profile.role?.toLowerCase().includes('custodian') || profile.role?.toLowerCase().includes('admin');
+    setAccessLevel(isCust ? 'custodian' : 'faculty');
+    const cleanDept = (profile.role || '').replace(/^(Custodian|Faculty)\s*[-–:]*\s*/i, '').trim();
+    setDepartment(cleanDept);
     setEnrollmentStatus(profile.camera_status || 'idle');
     // Auto-expand camera section when a faculty is selected
     setCameraExpanded(true);
   };
 
   const saveFaculty = async () => {
-    if (name.trim().length < 2 || role.trim().length < 2) {
-      Alert.alert('Missing details', 'Enter a faculty name and role.');
+    if (name.trim().length < 2) {
+      Alert.alert('Missing details', 'Enter a full name.');
       return;
     }
+
+    const computedRole = accessLevel === 'custodian'
+      ? (department.trim() ? `Custodian - ${department.trim()}` : 'Custodian')
+      : (department.trim() ? `Faculty - ${department.trim()}` : 'Faculty');
 
     setSaving(true);
     try {
       const saved = selectedFaculty
-        ? await updateFaculty({ id: selectedFaculty.id, name, role })
-        : await createFaculty({ name, role });
+        ? await updateFaculty({ id: selectedFaculty.id, name: name.trim(), role: computedRole })
+        : await createFaculty({ name: name.trim(), role: computedRole });
 
       await loadFaculty();
       setSelectedFaculty(saved);
       setName(saved.name);
-      setRole(saved.role);
-      Alert.alert(selectedFaculty ? 'Faculty updated' : 'Faculty registered');
+      const isCust = saved.role?.toLowerCase().includes('custodian') || saved.role?.toLowerCase().includes('admin');
+      setAccessLevel(isCust ? 'custodian' : 'faculty');
+      const cleanDept = (saved.role || '').replace(/^(Custodian|Faculty)\s*[-–:]*\s*/i, '').trim();
+      setDepartment(cleanDept);
+      Alert.alert(selectedFaculty ? 'Profile updated' : 'Profile registered');
     } catch (error) {
       Alert.alert('Unable to save faculty', getErrorMessage(error));
     } finally {
@@ -332,10 +344,59 @@ export function FacultyManagementScreen() {
       {/* ── Registration form ── */}
       <View style={styles.card}>
         <FormField label="Full Name" value={name} onChangeText={setName} placeholder="Enter full name" />
-        <FormField label="Department / Role" value={role} onChangeText={setRole} placeholder="e.g. CCS Instructor" />
+        
+        {/* Access Level Selector */}
+        <View style={styles.accessLevelWrapper}>
+          <Text style={styles.accessLevelLabel}>Access Level & Role</Text>
+          <View style={styles.accessLevelRow}>
+            <TouchableOpacity
+              style={[
+                styles.accessLevelBtn,
+                accessLevel === 'faculty' && styles.accessLevelBtnActiveFaculty,
+              ]}
+              onPress={() => setAccessLevel('faculty')}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.accessLevelText,
+                  accessLevel === 'faculty' && styles.accessLevelTextActiveFaculty,
+                ]}
+              >
+                🎓 Faculty
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.accessLevelBtn,
+                accessLevel === 'custodian' && styles.accessLevelBtnActiveCustodian,
+              ]}
+              onPress={() => setAccessLevel('custodian')}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.accessLevelText,
+                  accessLevel === 'custodian' && styles.accessLevelTextActiveCustodian,
+                ]}
+              >
+                🛡️ Custodian
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <FormField
+          label="Department / Specialization"
+          value={department}
+          onChangeText={setDepartment}
+          placeholder="e.g. CCS Instructor, Network Lab"
+        />
+
         <View style={styles.actions}>
           <AppButton
-            label={selectedFaculty ? 'Update Profile' : 'Register Faculty'}
+            label={selectedFaculty ? 'Update Profile' : 'Register Profile'}
             loading={saving}
             onPress={saveFaculty}
           />
@@ -394,7 +455,7 @@ export function FacultyManagementScreen() {
             label="Raspberry Pi IP"
             value={piIp}
             onChangeText={setPiIp}
-            placeholder="192.168.100.19"
+            placeholder="192.168.110.27"
           />
 
           {/* Compact status card */}
@@ -500,7 +561,28 @@ export function FacultyManagementScreen() {
               }
             </View>
             <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>{item.name}</Text>
+              <View style={styles.rowTitleRow}>
+                <Text style={styles.rowTitle}>{item.name}</Text>
+                <View
+                  style={[
+                    styles.rolePillBadge,
+                    item.role?.toLowerCase().includes('custodian')
+                      ? styles.rolePillCustodian
+                      : styles.rolePillFaculty,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.rolePillText,
+                      item.role?.toLowerCase().includes('custodian')
+                        ? styles.rolePillTextCustodian
+                        : styles.rolePillTextFaculty,
+                    ]}
+                  >
+                    {item.role?.toLowerCase().includes('custodian') ? 'Custodian' : 'Faculty'}
+                  </Text>
+                </View>
+              </View>
               <Text style={styles.rowSubtitle}>{item.role}</Text>
             </View>
             <View style={styles.rowActions}>
@@ -779,15 +861,89 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  rowTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   rowTitle: {
     color: Colors.textPrimary,
     fontSize: 15,
     fontWeight: '800',
   },
+  rolePillBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  rolePillCustodian: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  rolePillFaculty: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  rolePillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  rolePillTextCustodian: {
+    color: '#1D4ED8',
+  },
+  rolePillTextFaculty: {
+    color: '#B45309',
+  },
   rowSubtitle: {
     color: Colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
+  },
+  accessLevelWrapper: {
+    gap: 6,
+    marginBottom: Spacing.xs,
+  },
+  accessLevelLabel: {
+    color: Colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  accessLevelRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  accessLevelBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accessLevelBtnActiveFaculty: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#F59E0B',
+  },
+  accessLevelBtnActiveCustodian: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#2563EB',
+  },
+  accessLevelText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  accessLevelTextActiveFaculty: {
+    color: '#B45309',
+  },
+  accessLevelTextActiveCustodian: {
+    color: '#1D4ED8',
   },
   rowActions: {
     flexDirection: 'row',

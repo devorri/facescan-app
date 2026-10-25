@@ -189,7 +189,7 @@ async function getLaboratoryId(): Promise<string | null> {
   }
 }
 
-export async function checkPiCameraStatus(piIp: string = '192.168.100.19'): Promise<PiStatus> {
+export async function checkPiCameraStatus(piIp: string = '192.168.110.27'): Promise<PiStatus> {
   console.log('🔍 Checking Pi camera status...');
 
   // --- Mode 1: Direct local HTTP (same Wi-Fi, fastest) ---
@@ -332,7 +332,7 @@ export async function checkPiCameraStatus(piIp: string = '192.168.100.19'): Prom
 
 export async function enrollFacultyFaceViaPi(
   profileId: string,
-  piIp: string = '192.168.100.19',
+  piIp: string = '192.168.110.27',
   delaySeconds: number = 0,
 ): Promise<Profile> {
   // Skip local HTTP /enroll entirely — the main recognition loop holds the camera device,

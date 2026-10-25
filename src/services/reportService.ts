@@ -242,6 +242,15 @@ export async function getAccessReportData(filters: ReportFilter): Promise<Report
       }
     }
 
+    // Also recognize if the hardware log reason already recorded the late status
+    if (!isLate && log.decision === 'granted' && log.reason?.toLowerCase().includes('late')) {
+      isLate = true;
+      const mMatch = log.reason.match(/late by (\d+)m/i);
+      if (mMatch && mMatch[1]) {
+        minutesLate = parseInt(mMatch[1], 10);
+      }
+    }
+
     // Determine display status and visual tags
     let displayStatus: 'Granted' | 'Denied' | 'Late' | 'Exited' = 'Granted';
     let statusBadgeColor = '#10B981'; // Green

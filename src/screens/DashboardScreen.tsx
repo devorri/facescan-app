@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Image,
   ImageBackground,
   RefreshControl,
@@ -13,15 +14,18 @@ import {
   Activity,
   ArrowRight,
   Calendar,
+  CalendarDays,
   Clock,
   DoorOpen,
   FileSpreadsheet,
+  GraduationCap,
   KeyRound,
   MapPin,
   ScanFace,
   ShieldAlert,
   Sparkles,
   Unlock,
+  UserCircle,
   Users,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -29,35 +33,84 @@ import { ForceDoorUnlockModal } from '../components/ForceDoorUnlockModal';
 import { ScreenState } from '../components/ScreenState';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import { getRecentAccessLogs } from '../services/accessLogService';
+import type { AuthUser } from '../services/authService';
 import { DashboardCounts, getDashboardCounts } from '../services/dashboardService';
-import type { AccessLogWithRelations } from '../types/database';
+import { DAYS_OF_WEEK, isFacultyScheduledNow, listSchedules } from '../services/scheduleService';
+import type { AccessLogWithRelations, ScheduleWithRelations } from '../types/database';
 
 type DashboardScreenProps = {
   onNavigateTab?: (tab: 'faculty' | 'schedule' | 'records' | 'reports' | 'monitoring' | 'profile') => void;
   adminUsername?: string;
+  currentUser?: AuthUser;
 };
 
-export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: DashboardScreenProps) {
+export function DashboardScreen({
+  onNavigateTab,
+  adminUsername = 'admin',
+  currentUser,
+}: DashboardScreenProps) {
   const [counts, setCounts] = useState<DashboardCounts | null>(null);
   const [recentLogs, setRecentLogs] = useState<AccessLogWithRelations[]>([]);
+  const [facultySchedules, setFacultySchedules] = useState<ScheduleWithRelations[]>([]);
+  const [isScheduledNow, setIsScheduledNow] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forceUnlockVisible, setForceUnlockVisible] = useState(false);
 
+  const isFaculty = currentUser?.role === 'faculty';
+
   const loadData = useCallback(async () => {
     setError(null);
     try {
-      const [nextCounts, logs] = await Promise.all([
-        getDashboardCounts(),
-        getRecentAccessLogs(4),
-      ]);
-      setCounts(nextCounts);
-      setRecentLogs(logs);
+      if (currentUser?.role === 'faculty') {
+        const [allScheds, logs, schedCheck] = await Promise.all([
+          listSchedules(),
+          getRecentAccessLogs(30),
+          isFacultyScheduledNow({
+            facultyId: currentUser.profileId,
+            username: currentUser.username,
+            name: currentUser.name,
+          }),
+        ]);
+
+        // Filter schedules for this faculty member
+        const myScheds = allScheds.filter((s) => {
+          if (currentUser.profileId && s.faculty_id === currentUser.profileId) return true;
+          const sProfName = s.profiles?.name?.toLowerCase().trim();
+          const uName = currentUser.name?.toLowerCase().trim();
+          const uUsername = currentUser.username?.toLowerCase().trim();
+          if (uName && sProfName === uName) return true;
+          if (uUsername && sProfName === uUsername) return true;
+          return false;
+        });
+
+        // Filter recent access logs for this faculty member
+        const myLogs = logs.filter((l) => {
+          if (currentUser.profileId && l.faculty_id === currentUser.profileId) return true;
+          const lProfName = l.profiles?.name?.toLowerCase().trim();
+          const uName = currentUser.name?.toLowerCase().trim();
+          const uUsername = currentUser.username?.toLowerCase().trim();
+          if (uName && lProfName === uName) return true;
+          if (uUsername && lProfName === uUsername) return true;
+          return false;
+        }).slice(0, 4);
+
+        setFacultySchedules(myScheds);
+        setRecentLogs(myLogs);
+        setIsScheduledNow(schedCheck.allowed);
+      } else {
+        const [nextCounts, logs] = await Promise.all([
+          getDashboardCounts(),
+          getRecentAccessLogs(4),
+        ]);
+        setCounts(nextCounts);
+        setRecentLogs(logs);
+      }
     } catch (err: any) {
       setError(err?.message || 'Failed to load dashboard data');
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     loadData().finally(() => setLoading(false));
@@ -68,6 +121,36 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
     await loadData();
     setRefreshing(false);
   };
+
+  const handleForceUnlockPress = async () => {
+    if (!currentUser || currentUser.role === 'custodian') {
+      // Custodian can unlock at any time
+      setForceUnlockVisible(true);
+      return;
+    }
+
+    // Faculty is restricted to their assigned schedule hours
+    const check = await isFacultyScheduledNow({
+      facultyId: currentUser.profileId,
+      username: currentUser.username,
+      name: currentUser.name,
+    });
+
+    if (check.allowed) {
+      setForceUnlockVisible(true);
+    } else {
+      Alert.alert(
+        'Force Unlock Restricted',
+        check.message,
+        [{ text: 'OK' }],
+      );
+    }
+  };
+
+  // Faculty specific metrics computation
+  const todayDayName = DAYS_OF_WEEK[new Date().getDay() === 0 ? 0 : new Date().getDay() - 1] ?? 'Monday';
+  const todayClassesCount = facultySchedules.filter((s) => s.day_of_week === todayDayName).length;
+  const assignedLabCount = new Set(facultySchedules.map((s) => s.laboratory_id)).size;
 
   if (loading) {
     return <ScreenState loading message="Loading dashboard…" />;
@@ -95,11 +178,30 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
               <View style={styles.heroTop}>
                 <View style={styles.heroTextGroup}>
                   <View style={styles.greetingBadge}>
-                    <Sparkles size={13} color={Colors.blueLight} strokeWidth={2.5} />
-                    <Text style={styles.greetingBadgeText}>ADMIN CONTROL CENTER</Text>
+                    {isFaculty ? (
+                      <GraduationCap size={13} color="#F59E0B" strokeWidth={2.5} />
+                    ) : (
+                      <Sparkles size={13} color={Colors.blueLight} strokeWidth={2.5} />
+                    )}
+                    <Text
+                      style={[
+                        styles.greetingBadgeText,
+                        isFaculty && { color: '#F59E0B' },
+                      ]}
+                    >
+                      {isFaculty ? 'FACULTY PORTAL' : 'ADMIN CONTROL CENTER'}
+                    </Text>
                   </View>
-                  <Text style={styles.heroTitle}>Overview & Status</Text>
-                  <Text style={styles.heroSub}>Facial Recognition Laboratory Access</Text>
+                  <Text style={styles.heroTitle}>
+                    {isFaculty
+                      ? `Welcome, ${currentUser?.name || currentUser?.username}`
+                      : 'Overview & Status'}
+                  </Text>
+                  <Text style={styles.heroSub}>
+                    {isFaculty
+                      ? 'Laboratory Class Access & Teaching Schedule'
+                      : 'Facial Recognition Laboratory Access'}
+                  </Text>
                 </View>
 
                 {/* Subtle Province / Pampanga emblem watermark in hero */}
@@ -112,8 +214,21 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
 
               <View style={styles.heroFooter}>
                 <View style={styles.statusPill}>
-                  <View style={styles.statusDot} />
-                  <Text style={styles.statusPillText}>System Operational</Text>
+                  <View
+                    style={[
+                      styles.statusDot,
+                      isFaculty && {
+                        backgroundColor: isScheduledNow ? Colors.success : '#F59E0B',
+                      },
+                    ]}
+                  />
+                  <Text style={styles.statusPillText}>
+                    {isFaculty
+                      ? isScheduledNow
+                        ? 'Class in Session · Access Active'
+                        : 'Schedule Standby'
+                      : 'System Operational'}
+                  </Text>
                 </View>
                 <Text style={styles.timeTag}>
                   {new Date().toLocaleDateString(undefined, {
@@ -130,7 +245,7 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
         {/* ── FORCE DOOR UNLOCK ACTION BANNER ── */}
         <TouchableOpacity
           style={[styles.forceUnlockCard, Shadow.md]}
-          onPress={() => setForceUnlockVisible(true)}
+          onPress={handleForceUnlockPress}
           activeOpacity={0.85}
         >
           <View style={styles.forceUnlockLeft}>
@@ -140,11 +255,17 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
             <View style={styles.forceUnlockTextGroup}>
               <View style={styles.forceUnlockPill}>
                 <ShieldAlert size={12} color="#FFFFFF" />
-                <Text style={styles.forceUnlockPillText}>MANUAL OVERRIDE</Text>
+                <Text style={styles.forceUnlockPillText}>
+                  {isFaculty ? 'FACULTY DOOR ACCESS' : 'CUSTODIAN OVERRIDE'}
+                </Text>
               </View>
-              <Text style={styles.forceUnlockTitle}>Force Door Access</Text>
+              <Text style={styles.forceUnlockTitle}>
+                {isFaculty ? 'Laboratory Door Access' : 'Force Door Access'}
+              </Text>
               <Text style={styles.forceUnlockSub}>
-                Camera-verified manual door unlock & log
+                {isFaculty
+                  ? 'Camera-verified unlock · Permitted during your assigned class schedule'
+                  : '24/7 camera-verified manual door unlock & log'}
               </Text>
             </View>
           </View>
@@ -161,103 +282,188 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
 
         {/* ── Quick Action Shortcuts ── */}
         <View style={styles.quickActionsRow}>
-          <TouchableOpacity
-            style={styles.actionChip}
-            onPress={() => onNavigateTab?.('faculty')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.actionIconWrap, { backgroundColor: '#EBF5FF' }]}>
-              <ScanFace size={18} color={Colors.blue} strokeWidth={2} />
-            </View>
-            <Text style={styles.actionChipText}>Enroll Face</Text>
-          </TouchableOpacity>
+          {isFaculty ? (
+            <>
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('schedule')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#F5F3FF' }]}>
+                  <Calendar size={18} color="#7C3AED" strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>My Schedule</Text>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionChip}
-            onPress={() => onNavigateTab?.('schedule')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.actionIconWrap, { backgroundColor: '#F5F3FF' }]}>
-              <Calendar size={18} color="#7C3AED" strokeWidth={2} />
-            </View>
-            <Text style={styles.actionChipText}>Schedule</Text>
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={handleForceUnlockPress}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#EBF5FF' }]}>
+                  <Unlock size={18} color={Colors.blue} strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>Door Access</Text>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionChip}
-            onPress={() => onNavigateTab?.('monitoring')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.actionIconWrap, { backgroundColor: '#D1FAE5' }]}>
-              <Activity size={18} color={Colors.success} strokeWidth={2} />
-            </View>
-            <Text style={styles.actionChipText}>Live Feed</Text>
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('profile')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                  <UserCircle size={18} color="#D97706" strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>My Profile</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('faculty')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#EBF5FF' }]}>
+                  <ScanFace size={18} color={Colors.blue} strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>Enroll Face</Text>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionChip}
-            onPress={() => onNavigateTab?.('reports')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
-              <FileSpreadsheet size={18} color="#D97706" strokeWidth={2} />
-            </View>
-            <Text style={styles.actionChipText}>Reports</Text>
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('schedule')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#F5F3FF' }]}>
+                  <Calendar size={18} color="#7C3AED" strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>Schedule</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('monitoring')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#D1FAE5' }]}>
+                  <Activity size={18} color={Colors.success} strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>Live Feed</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionChip}
+                onPress={() => onNavigateTab?.('reports')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                  <FileSpreadsheet size={18} color="#D97706" strokeWidth={2} />
+                </View>
+                <Text style={styles.actionChipText}>Reports</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* ── Metrics Grid (2x2) ── */}
-        <Text style={styles.sectionHeader}>Key Metrics</Text>
+        <Text style={styles.sectionHeader}>{isFaculty ? 'My Teaching Overview' : 'Key Metrics'}</Text>
         <View style={styles.metricsGrid}>
-          <MetricCard
-            label="Total Faculty"
-            value={counts?.facultyCount ?? 0}
-            icon={Users}
-            accent={Colors.blue}
-            bg="#EBF5FF"
-            onPress={() => onNavigateTab?.('faculty')}
-          />
-          <MetricCard
-            label="Laboratories"
-            value={counts?.laboratoryCount ?? 0}
-            icon={DoorOpen}
-            accent="#7C3AED"
-            bg="#F5F3FF"
-          />
-          <MetricCard
-            label="Access Today"
-            value={counts?.todayAccessCount ?? 0}
-            icon={Unlock}
-            accent={Colors.success}
-            bg="#D1FAE5"
-            onPress={() => onNavigateTab?.('records')}
-          />
-          <MetricCard
-            label="System Mode"
-            valueText="Active"
-            icon={Activity}
-            accent="#0EA5E9"
-            bg="#E0F2FE"
-            onPress={() => onNavigateTab?.('monitoring')}
-          />
+          {isFaculty ? (
+            <>
+              <MetricCard
+                label="My Classes"
+                value={facultySchedules.length}
+                icon={CalendarDays}
+                accent={Colors.blue}
+                bg="#EBF5FF"
+                onPress={() => onNavigateTab?.('schedule')}
+              />
+              <MetricCard
+                label="Assigned Labs"
+                value={assignedLabCount}
+                icon={DoorOpen}
+                accent="#7C3AED"
+                bg="#F5F3FF"
+              />
+              <MetricCard
+                label="Today's Classes"
+                value={todayClassesCount}
+                icon={Clock}
+                accent={Colors.success}
+                bg="#D1FAE5"
+                onPress={() => onNavigateTab?.('schedule')}
+              />
+              <MetricCard
+                label="Door Status"
+                valueText={isScheduledNow ? 'Authorized' : 'Standby'}
+                icon={Unlock}
+                accent={isScheduledNow ? Colors.success : '#D97706'}
+                bg={isScheduledNow ? '#D1FAE5' : '#FEF3C7'}
+                onPress={handleForceUnlockPress}
+              />
+            </>
+          ) : (
+            <>
+              <MetricCard
+                label="Total Faculty"
+                value={counts?.facultyCount ?? 0}
+                icon={Users}
+                accent={Colors.blue}
+                bg="#EBF5FF"
+                onPress={() => onNavigateTab?.('faculty')}
+              />
+              <MetricCard
+                label="Laboratories"
+                value={counts?.laboratoryCount ?? 0}
+                icon={DoorOpen}
+                accent="#7C3AED"
+                bg="#F5F3FF"
+              />
+              <MetricCard
+                label="Access Today"
+                value={counts?.todayAccessCount ?? 0}
+                icon={Unlock}
+                accent={Colors.success}
+                bg="#D1FAE5"
+                onPress={() => onNavigateTab?.('records')}
+              />
+              <MetricCard
+                label="System Mode"
+                valueText="Active"
+                icon={Activity}
+                accent="#0EA5E9"
+                bg="#E0F2FE"
+                onPress={() => onNavigateTab?.('monitoring')}
+              />
+            </>
+          )}
         </View>
 
         {/* ── Recent Activity Section ── */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionHeader}>Recent Entry Activity</Text>
-          <TouchableOpacity
-            style={styles.viewAllBtn}
-            onPress={() => onNavigateTab?.('records')}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.viewAllText}>View All</Text>
-            <ArrowRight size={14} color={Colors.blue} strokeWidth={2.5} />
-          </TouchableOpacity>
+          <Text style={styles.sectionHeader}>
+            {isFaculty ? 'My Recent Access Activity' : 'Recent Entry Activity'}
+          </Text>
+          {!isFaculty && (
+            <TouchableOpacity
+              style={styles.viewAllBtn}
+              onPress={() => onNavigateTab?.('records')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.viewAllText}>View All</Text>
+              <ArrowRight size={14} color={Colors.blue} strokeWidth={2.5} />
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={[styles.cardContainer, Shadow.sm]}>
           {recentLogs.length === 0 ? (
-            <Text style={styles.emptyLogsText}>No recent access attempts recorded.</Text>
+            <Text style={styles.emptyLogsText}>
+              {isFaculty
+                ? 'No recent laboratory access attempts recorded for your account.'
+                : 'No recent access attempts recorded.'}
+            </Text>
           ) : (
             recentLogs.map((log, index) => {
               const granted = log.decision === 'granted';
@@ -267,6 +473,26 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
                 minute: '2-digit',
                 hour12: true,
               });
+
+              const isLate = (log.reason?.toLowerCase().includes('late')) ?? false;
+
+              const badgeStyle = !granted
+                ? styles.badgeDenied
+                : isLate
+                ? styles.badgeLate
+                : styles.badgeGranted;
+
+              const textStyle = !granted
+                ? styles.textDenied
+                : isLate
+                ? styles.textLate
+                : styles.textGranted;
+
+              const dotColor = !granted
+                ? Colors.danger
+                : isLate
+                ? '#D97706'
+                : Colors.success;
 
               return (
                 <View
@@ -279,7 +505,7 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
                   <View
                     style={[
                       styles.logStatusDot,
-                      { backgroundColor: granted ? Colors.success : Colors.danger },
+                      { backgroundColor: dotColor },
                     ]}
                   />
                   <View style={styles.logBody}>
@@ -293,16 +519,16 @@ export function DashboardScreen({ onNavigateTab, adminUsername = 'admin' }: Dash
                   <View
                     style={[
                       styles.logBadge,
-                      granted ? styles.badgeGranted : styles.badgeDenied,
+                      badgeStyle,
                     ]}
                   >
                     <Text
                       style={[
                         styles.logBadgeText,
-                        granted ? styles.textGranted : styles.textDenied,
+                        textStyle,
                       ]}
                     >
-                      {granted ? 'GRANTED' : 'DENIED'}
+                      {!granted ? 'DENIED' : isLate ? 'LATE' : 'GRANTED'}
                     </Text>
                   </View>
                 </View>
@@ -706,6 +932,9 @@ const styles = StyleSheet.create({
   badgeGranted: {
     backgroundColor: Colors.successBg,
   },
+  badgeLate: {
+    backgroundColor: '#FEF3C7',
+  },
   badgeDenied: {
     backgroundColor: Colors.dangerBg,
   },
@@ -716,6 +945,9 @@ const styles = StyleSheet.create({
   },
   textGranted: {
     color: Colors.success,
+  },
+  textLate: {
+    color: '#D97706',
   },
   textDenied: {
     color: Colors.danger,

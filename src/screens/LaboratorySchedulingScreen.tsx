@@ -12,8 +12,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  AlertCircle,
   CalendarDays,
   Clock,
+  Eye,
   PenLine,
   Plus,
   Trash2,
@@ -31,6 +33,7 @@ import {
   listSchedules,
   updateSchedule,
 } from '../services/scheduleService';
+import type { AuthUser } from '../services/authService';
 import type { Laboratory, Profile, ScheduleWithRelations } from '../types/database';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -124,8 +127,17 @@ function validateWindow(start: Date, end: Date): string | null {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function LaboratorySchedulingScreen() {
+type LaboratorySchedulingScreenProps = {
+  userRole?: 'custodian' | 'faculty';
+  currentUser?: AuthUser;
+};
+
+export function LaboratorySchedulingScreen({
+  userRole = 'custodian',
+  currentUser,
+}: LaboratorySchedulingScreenProps) {
   const insets = useSafeAreaInsets();
+  const isFacultyUser = userRole === 'faculty' || currentUser?.role === 'faculty';
   const [faculty, setFaculty]               = useState<Profile[]>([]);
   const [labs, setLabs]                     = useState<Laboratory[]>([]);
   const [schedules, setSchedules]           = useState<ScheduleWithRelations[]>([]);
@@ -179,12 +191,27 @@ export function LaboratorySchedulingScreen() {
     [labs],
   );
 
+  // ── Filtered user schedules ──────────────────────────────────────────────
+  // If user is a faculty member, strictly isolate to their own assigned schedules
+  const userSchedules = useMemo(() => {
+    if (!isFacultyUser) return schedules;
+    return schedules.filter((s) => {
+      if (currentUser?.profileId && s.faculty_id === currentUser.profileId) return true;
+      const sProfName = s.profiles?.name?.toLowerCase().trim();
+      const uName = currentUser?.name?.toLowerCase().trim();
+      const uUsername = currentUser?.username?.toLowerCase().trim();
+      if (uName && sProfName === uName) return true;
+      if (uUsername && sProfName === uUsername) return true;
+      return false;
+    });
+  }, [schedules, isFacultyUser, currentUser]);
+
   // ── Grouped schedules ─────────────────────────────────────────────────────
 
   const groupedSchedules = useMemo(() => {
     const groups: { day: string; items: ScheduleWithRelations[] }[] = [];
     for (const day of DAYS_OF_WEEK) {
-      const items = schedules.filter((s) => s.day_of_week === day);
+      const items = userSchedules.filter((s) => s.day_of_week === day);
       if (items.length > 0) {
         // Sort by start time within each day
         items.sort((a, b) => a.start_time.localeCompare(b.start_time));
@@ -192,7 +219,7 @@ export function LaboratorySchedulingScreen() {
       }
     }
     return groups;
-  }, [schedules]);
+  }, [userSchedules]);
 
   // ── Form actions ───────────────────────────────────────────────────────────
 
@@ -207,11 +234,18 @@ export function LaboratorySchedulingScreen() {
   };
 
   const openNewForm = () => {
+    if (isFacultyUser) {
+      Alert.alert('Permission Denied', 'Only the Laboratory Custodian can assign or create schedules.');
+      return;
+    }
     resetForm();
     setFormOpen(true);
   };
 
   const selectSchedule = (schedule: ScheduleWithRelations) => {
+    if (isFacultyUser) {
+      return;
+    }
     setSelectedSchedule(schedule);
     setFacultyId(schedule.faculty_id);
     setLaboratoryId(schedule.laboratory_id);
@@ -255,7 +289,43 @@ export function LaboratorySchedulingScreen() {
     });
   };
 
+  // Real-time conflict feedback
+  const currentConflict = useMemo(() => {
+    if (!formOpen || !facultyId || !laboratoryId) return null;
+    const newStartMins = startTime.getHours() * 60 + startTime.getMinutes();
+    const newEndMins = endTime.getHours() * 60 + endTime.getMinutes();
+    if (newEndMins <= newStartMins) return null;
+
+    for (const s of schedules) {
+      if (selectedSchedule && s.id === selectedSchedule.id) continue;
+      if (s.day_of_week !== dayOfWeek) continue;
+
+      const sStartMins = timeStrToMinutes(s.start_time);
+      const sEndMins = timeStrToMinutes(s.end_time);
+
+      if (newStartMins < sEndMins && newEndMins > sStartMins) {
+        const timeRange = `${formatDbTime(s.start_time)} – ${formatDbTime(s.end_time)}`;
+        if (s.laboratory_id === laboratoryId) {
+          const labName = s.laboratories?.name || 'This laboratory';
+          const profName = s.profiles?.name || 'another instructor';
+          return `${labName} is already scheduled on ${dayOfWeek} from ${timeRange} by ${profName}.`;
+        }
+        if (s.faculty_id === facultyId) {
+          const labName = s.laboratories?.name || 'another laboratory';
+          const profName = s.profiles?.name || 'This faculty member';
+          return `${profName} is already assigned to ${labName} on ${dayOfWeek} from ${timeRange}.`;
+        }
+      }
+    }
+    return null;
+  }, [formOpen, facultyId, laboratoryId, dayOfWeek, startTime, endTime, schedules, selectedSchedule]);
+
   const saveSchedule = async () => {
+    if (userRole === 'faculty') {
+      Alert.alert('Permission Denied', 'Only the Laboratory Custodian can set or modify schedules.');
+      return;
+    }
+
     if (!facultyId || !laboratoryId) {
       Alert.alert('Missing selection', 'Choose a faculty member and laboratory.');
       return;
@@ -264,6 +334,11 @@ export function LaboratorySchedulingScreen() {
     const validationError = validateWindow(startTime, endTime);
     if (validationError) {
       Alert.alert('Invalid Schedule Window', validationError);
+      return;
+    }
+
+    if (currentConflict) {
+      Alert.alert('Schedule Conflict', currentConflict);
       return;
     }
 
@@ -330,6 +405,11 @@ export function LaboratorySchedulingScreen() {
   };
 
   const removeSchedule = (schedule: ScheduleWithRelations) => {
+    if (userRole === 'faculty') {
+      Alert.alert('Permission Denied', 'Only the Laboratory Custodian can delete schedules.');
+      return;
+    }
+
     Alert.alert('Delete schedule?', 'This faculty schedule will be removed.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -364,15 +444,26 @@ export function LaboratorySchedulingScreen() {
         {/* Header */}
         <View style={styles.headerRow}>
           <View>
-            <Text style={styles.heading}>Schedules</Text>
+            <Text style={styles.heading}>
+              {isFacultyUser ? 'My Schedule' : 'Schedules'}
+            </Text>
             <Text style={styles.subheading}>
-              {schedules.length} schedule{schedules.length !== 1 ? 's' : ''} assigned
+              {isFacultyUser
+                ? `${userSchedules.length} teaching schedule${userSchedules.length !== 1 ? 's' : ''} assigned to you`
+                : `${schedules.length} schedule${schedules.length !== 1 ? 's' : ''} assigned`}
             </Text>
           </View>
-          <TouchableOpacity style={styles.addButton} onPress={openNewForm} activeOpacity={0.8}>
-            <Plus size={20} color={Colors.textWhite} strokeWidth={2.5} />
-            <Text style={styles.addButtonText}>Add</Text>
-          </TouchableOpacity>
+          {!isFacultyUser ? (
+            <TouchableOpacity style={styles.addButton} onPress={openNewForm} activeOpacity={0.8}>
+              <Plus size={20} color={Colors.textWhite} strokeWidth={2.5} />
+              <Text style={styles.addButtonText}>Add</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.viewOnlyBadge}>
+              <Eye size={14} color={Colors.blueLight} strokeWidth={2.2} />
+              <Text style={styles.viewOnlyBadgeText}>Faculty Schedule</Text>
+            </View>
+          )}
         </View>
 
         {/* Operating hours info */}
@@ -385,8 +476,14 @@ export function LaboratorySchedulingScreen() {
         {groupedSchedules.length === 0 ? (
           <View style={styles.emptyState}>
             <CalendarDays size={40} color={Colors.textMuted} strokeWidth={1.4} />
-            <Text style={styles.emptyTitle}>No schedules yet</Text>
-            <Text style={styles.emptySubtitle}>Tap "Add" to assign a faculty schedule</Text>
+            <Text style={styles.emptyTitle}>
+              {isFacultyUser ? 'No Assigned Classes' : 'No schedules yet'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {isFacultyUser
+                ? "You don't have any laboratory schedules assigned yet. Contact the Laboratory Custodian to register your class schedule."
+                : 'Tap "Add" to assign a faculty schedule'}
+            </Text>
           </View>
         ) : (
           groupedSchedules.map((group) => (
@@ -406,10 +503,14 @@ export function LaboratorySchedulingScreen() {
                   <View style={styles.cardAccent} />
                   <View style={styles.cardBody}>
                     <Text style={styles.cardFaculty}>
-                      {item.profiles?.name ?? 'Unknown faculty'}
+                      {isFacultyUser
+                        ? (item.laboratories?.name ?? 'Assigned Laboratory')
+                        : (item.profiles?.name ?? 'Unknown faculty')}
                     </Text>
                     <Text style={styles.cardLab}>
-                      {item.laboratories?.name ?? 'Unknown laboratory'}
+                      {isFacultyUser
+                        ? (item.laboratories?.location ? `Location: ${item.laboratories.location}` : 'Campus Laboratory Room')
+                        : (item.laboratories?.name ?? 'Unknown laboratory')}
                     </Text>
                     <View style={styles.timeRow}>
                       <Clock size={12} color={Colors.blue} strokeWidth={2} />
@@ -418,22 +519,24 @@ export function LaboratorySchedulingScreen() {
                       </Text>
                     </View>
                   </View>
-                  <View style={styles.cardActions}>
-                    <TouchableOpacity
-                      style={styles.iconBtn}
-                      onPress={() => selectSchedule(item)}
-                      activeOpacity={0.7}
-                    >
-                      <PenLine size={16} color={Colors.blue} strokeWidth={2} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.iconBtn}
-                      onPress={() => removeSchedule(item)}
-                      activeOpacity={0.7}
-                    >
-                      <Trash2 size={16} color={Colors.danger} strokeWidth={2} />
-                    </TouchableOpacity>
-                  </View>
+                  {!isFacultyUser && (
+                    <View style={styles.cardActions}>
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => selectSchedule(item)}
+                        activeOpacity={0.7}
+                      >
+                        <PenLine size={16} color={Colors.blue} strokeWidth={2} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => removeSchedule(item)}
+                        activeOpacity={0.7}
+                      >
+                        <Trash2 size={16} color={Colors.danger} strokeWidth={2} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
               ))}
             </View>
@@ -577,11 +680,22 @@ export function LaboratorySchedulingScreen() {
               </View>
             </View>
 
+            {/* Conflict banner */}
+            {currentConflict && (
+              <View style={styles.conflictBanner}>
+                <AlertCircle size={18} color={Colors.danger} strokeWidth={2.2} />
+                <View style={styles.conflictTextWrap}>
+                  <Text style={styles.conflictTitle}>Time Slot Unavailable</Text>
+                  <Text style={styles.conflictText}>{currentConflict}</Text>
+                </View>
+              </View>
+            )}
+
             {/* Actions */}
             <View style={styles.formActions}>
               <AppButton
                 label={selectedSchedule ? 'Update Schedule' : 'Assign Schedule'}
-                disabled={!facultyId || !laboratoryId}
+                disabled={!facultyId || !laboratoryId || !!currentConflict}
                 loading={saving}
                 onPress={saveSchedule}
               />
@@ -653,6 +767,22 @@ const styles = StyleSheet.create({
   addButtonText: {
     color: Colors.textWhite,
     fontSize: 14,
+    fontWeight: '700',
+  },
+  viewOnlyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  viewOnlyBadgeText: {
+    color: Colors.blue,
+    fontSize: 12,
     fontWeight: '700',
   },
 
@@ -870,6 +1000,32 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontSize: 14,
     fontWeight: '700',
+  },
+  conflictBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    gap: 10,
+    marginTop: Spacing.xs,
+  },
+  conflictTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  conflictTitle: {
+    color: '#991B1B',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  conflictText: {
+    color: '#B91C1C',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
   },
   formActions: {
     gap: 10,
