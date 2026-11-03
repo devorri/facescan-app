@@ -10,6 +10,8 @@ const semaphoreApiKey =
   process.env.EXPO_PUBLIC_SEMAPHORE_API_KEY ||
   'f18fe7eb9f2f4b5477776b98d8b55565';
 
+// Must be a sender name APPROVED on your Semaphore account. If it is not approved,
+// notificationService automatically retries without it (Semaphore's default sender).
 const semaphoreSenderName =
   process.env.EXPO_PUBLIC_SEMAPHORE_SENDER_NAME ||
   'TranslertPH';
@@ -26,6 +28,9 @@ const emailJsPublicKey =
   process.env.EXPO_PUBLIC_EMAILJS_PUBLIC_KEY ||
   'tTDzt3vF6T7t1eO-u';
 
+// Only needed if "Use Private Key (recommended)" is ON in EmailJS → Account → Security.
+const emailJsPrivateKey = process.env.EXPO_PUBLIC_EMAILJS_PRIVATE_KEY || '';
+
 export const env = {
   supabaseUrl,
   supabaseAnonKey,
@@ -34,4 +39,5 @@ export const env = {
   emailJsServiceId,
   emailJsTemplateId,
   emailJsPublicKey,
+  emailJsPrivateKey,
 };

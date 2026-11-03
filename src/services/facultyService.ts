@@ -16,6 +16,33 @@ export type FaceEmbeddingResponse = {
   embedding: number[];
 };
 
+/** True only when PostgREST says the `phone` column itself is missing. */
+function isMissingPhoneColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const msg = error.message || '';
+  return (error.code === 'PGRST204' && msg.includes('phone')) || /column .*phone.* does not exist/i.test(msg) || /'phone' column/i.test(msg);
+}
+
+/** Turn a Supabase/PostgREST error into something a person can act on. */
+export function explainDbError(error: unknown, action: string): Error {
+  const e = (error || {}) as { code?: string; message?: string; details?: string; hint?: string };
+  const msg = e.message || String(error);
+  if (e.code === '23505') {
+    return new Error(`Cannot ${action}: a record with the same value already exists (${e.details || msg}).`);
+  }
+  if (e.code === '23503') {
+    return new Error(`Cannot ${action}: other records still point to it (${e.details || msg}). Run supabase/migrations/fix_faculty_delete_and_limits.sql once in the Supabase SQL editor.`);
+  }
+  if (e.code === '42501' || /row-level security/i.test(msg)) {
+    return new Error(`Cannot ${action}: blocked by Supabase Row Level Security. Run supabase/migrations/fix_faculty_delete_and_limits.sql once in the Supabase SQL editor.`);
+  }
+  if (e.code === 'P0001') {
+    // raised by a database trigger/function (e.g. a "max faculty" limit)
+    return new Error(`Cannot ${action}: ${msg}${e.hint ? ` (${e.hint})` : ''}. A database trigger is blocking this — see fix_faculty_delete_and_limits.sql.`);
+  }
+  return new Error(`Cannot ${action}: ${msg}${e.details ? ` — ${e.details}` : ''}${e.code ? ` [${e.code}]` : ''}`);
+}
+
 export type PiStatus = {
   online: boolean;
   cameraReady: boolean;
@@ -46,7 +73,7 @@ export async function createFaculty(input: CreateFacultyInput): Promise<Profile>
 
   if (error) {
     // If column 'phone' does not exist yet in DB schema, fallback gracefully
-    if (error.code === 'PGRST204' || error.message?.includes('phone')) {
+    if (isMissingPhoneColumn(error)) {
       console.warn('⚠️ Supabase profiles table does not have "phone" column yet. Falling back to avatar_url storage.');
       const fallbackPayload: Record<string, unknown> = {
         name: cleanName,
@@ -61,76 +88,39 @@ export async function createFaculty(input: CreateFacultyInput): Promise<Profile>
         .select()
         .single();
 
-      if (fallbackError) throw fallbackError;
+      if (fallbackError) throw explainDbError(fallbackError, 'register faculty');
       return {
         ...fallbackData,
         phone: cleanPhone,
       };
     }
-    throw error;
+    throw explainDbError(error, 'register faculty');
   }
 
   return data;
 }
 
 /**
- * Generates a normalized 128-dimensional vector from image data.
- * Used as a fallback when the remote Supabase Edge Function is not deployed or reachable.
+ * Enroll from a phone photo through the `generate-face-embedding` Edge Function.
+ *
+ * The old version silently fell back to a HASH of the image bytes when the Edge
+ * Function was not reachable. That "embedding" is random noise — the person could
+ * never be recognised and it polluted the face list. Now it fails loudly instead.
+ * (Enrollment through the Pi camera is the recommended path: it has liveness.)
  */
-function generateLocalFaceEmbedding(base64Data: string): number[] {
-  const embedding = new Array<number>(128);
-  let hash1 = 5381;
-  let hash2 = 52711;
-
-  for (let i = 0; i < base64Data.length; i++) {
-    const char = base64Data.charCodeAt(i);
-    hash1 = ((hash1 << 5) + hash1) ^ char;
-    hash2 = ((hash2 << 5) + hash2) ^ char;
-  }
-
-  let normSq = 0;
-  for (let i = 0; i < 128; i++) {
-    const seed = (hash1 * (i + 1) + hash2 * (i * 3 + 7)) % 2147483647;
-    const val = (Math.abs(seed) % 20000 - 10000) / 10000;
-    embedding[i] = val;
-    normSq += val * val;
-  }
-
-  const norm = Math.sqrt(normSq) || 1;
-  return embedding.map((v) => Number((v / norm).toFixed(6)));
-}
-
 export async function enrollFacultyFace(profileId: string, imageBase64: string): Promise<Profile> {
-  let embedding: number[] | null = null;
+  const { data, error } = await supabase.functions.invoke<FaceEmbeddingResponse>('generate-face-embedding', {
+    body: { imageBase64 },
+  });
 
-  try {
-    const { data, error } = await supabase.functions.invoke<FaceEmbeddingResponse>(
-      'generate-face-embedding',
-      {
-        body: { imageBase64 },
-      },
+  if (error || !data?.embedding || data.embedding.length !== 128) {
+    throw new Error(
+      'Phone-photo enrollment is unavailable (face embedding service not reachable). Use "Capture via Pi Camera" instead.',
     );
-
-    if (!error && data?.embedding && data.embedding.length === 128) {
-      embedding = data.embedding;
-    } else if (error) {
-      console.warn('Supabase Edge Function returned non-2xx or 404 status:', error.message);
-    }
-  } catch (err) {
-    console.warn('Failed to invoke generate-face-embedding Edge Function:', err);
   }
 
-  // Ensure we have an embedding (Edge Function or fallback)
-  if (!embedding) {
-    console.log('Using client-side 128-d face embedding generator fallback.');
-    embedding = generateLocalFaceEmbedding(imageBase64);
-  }
-
-  // Normalize the vector
-  if (embedding) {
-    const norm = Math.sqrt(embedding.reduce((sum, v) => sum + v * v, 0)) || 1;
-    embedding = embedding.map(v => Number((v / norm).toFixed(6)));
-  }
+  const norm = Math.sqrt(data.embedding.reduce((sum, v) => sum + v * v, 0)) || 1;
+  const embedding = data.embedding.map((v) => Number((v / norm).toFixed(6)));
 
   const { data: profile, error: updateError } = await supabase
     .from('profiles')
@@ -139,7 +129,7 @@ export async function enrollFacultyFace(profileId: string, imageBase64: string):
     .select()
     .single();
 
-  if (updateError) throw updateError;
+  if (updateError) throw explainDbError(updateError, 'save face data');
   return profile;
 }
 
@@ -157,7 +147,7 @@ export async function listFaculty(): Promise<Profile[]> {
       }));
     }
 
-    if (error && (error.code === 'PGRST204' || error.message?.includes('phone'))) {
+    if (error && isMissingPhoneColumn(error)) {
       // Fallback if column phone doesn't exist
       const { data: fallbackData, error: fallbackError } = await supabase
         .from('profiles')
@@ -171,10 +161,10 @@ export async function listFaculty(): Promise<Profile[]> {
       }));
     }
 
-    if (error) throw error;
+    if (error) throw explainDbError(error, 'load faculty');
     return data ?? [];
   } catch (err) {
-    console.error('Error in listFaculty:', err);
+    console.warn('Error in listFaculty:', err);
     throw err;
   }
 }
@@ -200,7 +190,7 @@ export async function updateFaculty(input: UpdateFacultyInput): Promise<Profile>
     .single();
 
   if (error) {
-    if (error.code === 'PGRST204' || error.message?.includes('phone')) {
+    if (isMissingPhoneColumn(error)) {
       console.warn('⚠️ Supabase profiles table does not have "phone" column yet. Falling back to avatar_url.');
       const fallbackPayload: Record<string, unknown> = {
         name: cleanName,
@@ -216,22 +206,52 @@ export async function updateFaculty(input: UpdateFacultyInput): Promise<Profile>
         .select()
         .single();
 
-      if (fallbackError) throw fallbackError;
+      if (fallbackError) throw explainDbError(fallbackError, 'update faculty');
       return {
         ...fallbackData,
         phone: cleanPhone || null,
       };
     }
-    throw error;
+    throw explainDbError(error, 'update faculty');
   }
 
   return data;
 }
 
+/**
+ * Delete a faculty member.
+ *
+ * Why it used to fail: `schedules`, `access_logs`, `instructors` (and 4 grading
+ * tables) have foreign keys to `profiles` with no ON DELETE rule, so Postgres refuses to delete a profile that still
+ * has schedules or access logs (error 23503). We now:
+ *   1. delete that person's schedules (and their row in `instructors`),
+ *   2. detach their access logs (faculty_id -> null, the log rows/report history stay),
+ *   3. delete the profile and VERIFY a row was actually deleted (RLS can silently
+ *      delete 0 rows without returning an error).
+ * The SQL migration makes the database do steps 1-2 automatically as well.
+ */
 export async function deleteFaculty(profileId: string): Promise<void> {
-  const { error } = await supabase.from('profiles').delete().eq('id', profileId);
+  const { error: schedErr } = await supabase.from('schedules').delete().eq('faculty_id', profileId);
+  if (schedErr) console.warn('Could not remove schedules before delete:', schedErr.message);
 
-  if (error) throw error;
+  const { error: logsErr } = await supabase
+    .from('access_logs')
+    .update({ faculty_id: null })
+    .eq('faculty_id', profileId);
+  if (logsErr) console.warn('Could not detach access logs before delete:', logsErr.message);
+
+  // `instructors` (shared with the grading tables) also references profiles
+  const { error: instErr } = await (supabase as any).from('instructors').delete().eq('profile_id', profileId);
+  if (instErr) console.warn('Could not remove linked instructor row before delete:', instErr.message);
+
+  const { data, error } = await supabase.from('profiles').delete().eq('id', profileId).select('id');
+
+  if (error) throw explainDbError(error, 'delete faculty');
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Delete was blocked by the database (0 rows deleted). Supabase Row Level Security has no DELETE policy for profiles — run supabase/migrations/fix_faculty_delete_and_limits.sql once in the Supabase SQL editor.',
+    );
+  }
 }
 
 /**
@@ -256,7 +276,7 @@ async function getLaboratoryId(): Promise<string | null> {
       .maybeSingle();
 
     if (error) {
-      console.error('❌ Error fetching laboratory:', error);
+      console.warn('❌ Error fetching laboratory:', error);
       return null;
     }
 
@@ -270,7 +290,7 @@ async function getLaboratoryId(): Promise<string | null> {
         .maybeSingle();
 
       if (firstError) {
-        console.error('❌ Error fetching first laboratory:', firstError);
+        console.warn('❌ Error fetching first laboratory:', firstError);
         return null;
       }
 
@@ -281,7 +301,7 @@ async function getLaboratoryId(): Promise<string | null> {
     console.log('📡 Found laboratory:', data.name, 'with ID:', data.id);
     return data.id;
   } catch (error) {
-    console.error('❌ Error getting laboratory ID:', error);
+    console.warn('❌ Error getting laboratory ID:', error);
     return null;
   }
 }
@@ -339,7 +359,7 @@ export async function checkPiCameraStatus(piIp: string = '192.168.110.27'): Prom
       .maybeSingle();
 
     if (error) {
-      console.error('❌ Supabase error:', error);
+      console.warn('❌ Supabase error:', error);
       return {
         online: false,
         cameraReady: false,
@@ -371,7 +391,7 @@ export async function checkPiCameraStatus(piIp: string = '192.168.110.27'): Prom
           ps = JSON.parse(ps);
           console.log('📡 Parsed pi_status from string:', ps);
         } catch (e) {
-          console.error('❌ Failed to parse pi_status:', e);
+          console.warn('❌ Failed to parse pi_status:', e);
           ps = {};
         }
       }
@@ -414,7 +434,7 @@ export async function checkPiCameraStatus(piIp: string = '192.168.110.27'): Prom
       mode: typeof data?.mode === 'string' ? data.mode : 'recognition',
     };
   } catch (error) {
-    console.error('❌ Error reading from Supabase:', error);
+    console.warn('❌ Error reading from Supabase:', error);
   }
 
   console.log('❌ All methods failed, returning offline status');
@@ -427,50 +447,78 @@ export async function checkPiCameraStatus(piIp: string = '192.168.110.27'): Prom
   };
 }
 
+export type PiEnrollProgress = (status: string) => void;
+
+/**
+ * Ask the Pi to enroll a face (it must be in ENROLLMENT mode).
+ *
+ * The Pi now runs a live challenge (look straight, then a random series of
+ * LEFT / RIGHT / UP / DOWN turns) and mirrors every prompt into
+ * profiles.camera_status as "capturing: <prompt>" — `onProgress` receives those
+ * so the app can show the same instruction as the kiosk screen.
+ */
 export async function enrollFacultyFaceViaPi(
   profileId: string,
-  piIp: string = '192.168.110.27',
+  _piIp: string = '192.168.110.27',
   delaySeconds: number = 0,
+  onProgress?: PiEnrollProgress,
 ): Promise<Profile> {
-  // Skip local HTTP /enroll entirely — the main recognition loop holds the camera device,
-  // so any new VideoCapture() call from the HTTP handler will fail with "camera busy".
-  // Instead, set camera_status = 'pending' in Supabase directly. The Pi's background
-  // daemon detects this, grabs the already-open camera frame (latest_frame), and writes
-  // back the embedding + camera_status = 'completed'.
-
   if (delaySeconds > 0) {
     await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000));
   }
 
-  console.log('📡 Triggering enrollment via Supabase camera_status flag...');
-  await supabase.from('profiles').update({ camera_status: 'pending' }).eq('id', profileId);
+  const { error: pendingErr } = await supabase
+    .from('profiles')
+    .update({ camera_status: 'pending' })
+    .eq('id', profileId);
+  if (pendingErr) throw explainDbError(pendingErr, 'start enrollment');
+  onProgress?.('pending');
 
-  // Poll Supabase for 30 seconds (Pi daemon runs every 2s, so plenty of time)
-  for (let i = 0; i < 30; i++) {
+  const detailOf = (status: string) =>
+    status.includes(':') ? status.substring(status.indexOf(':') + 1).trim() : '';
+
+  // The live challenge takes ~10-40 s on the Pi; give it up to 90 s in total
+  const deadline = Date.now() + 90_000;
+  let lastStatus = '';
+  let pendingSince = Date.now();
+
+  while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    const { data: profile } = await supabase.from('profiles').select().eq('id', profileId).single();
+    const { data: profile, error } = await supabase.from('profiles').select().eq('id', profileId).maybeSingle();
+    if (error || !profile) continue;
 
-    if (profile?.camera_status === 'completed' && profile.face_embedding) {
-      console.log('✅ Enrollment completed via Supabase!');
+    const status = profile.camera_status || '';
+    if (status !== lastStatus) {
+      lastStatus = status;
+      onProgress?.(status);
+    }
+
+    if (status === 'completed' && profile.face_embedding) {
       return profile;
     }
-    if (profile?.camera_status?.startsWith('failed_spoof')) {
-      const detail = profile.camera_status.includes(':')
-        ? profile.camera_status.substring(profile.camera_status.indexOf(':') + 1).trim()
-        : 'Photo / screen presentation detected. A live person must stand in front of the camera.';
-      throw new Error(`Enrollment rejected: ${detail}`);
+    if (status.startsWith('failed_duplicate')) {
+      throw new Error(`Enrollment rejected: ${detailOf(status) || 'This face is already registered to another faculty.'}`);
     }
-    if (profile?.camera_status === 'failed_no_face') {
-      throw new Error('Pi Camera captured but no face was detected. Stand closer to the camera.');
+    if (status.startsWith('failed_spoof')) {
+      throw new Error(`Enrollment rejected (liveness): ${detailOf(status) || 'A live person must stand in front of the camera.'}`);
     }
-    if (profile?.camera_status === 'failed_camera_error' || profile?.camera_status === 'failed_camera_offline') {
-      // Camera device was busy — this means latest_frame wasn't available yet.
-      // Reset to pending and keep waiting (main loop will populate latest_frame).
-      console.log('⚠️ Pi capture failed, retrying... (camera busy)');
+    if (status.startsWith('failed_timeout')) {
+      throw new Error(`Enrollment timed out: ${detailOf(status) || 'Follow the prompts on the Pi screen.'}`);
+    }
+    if (status === 'failed_no_face') {
+      throw new Error('No face detected by the Pi camera. Stand closer, face the camera, and try again.');
+    }
+    if (status === 'failed_camera_error' || status === 'failed_camera_offline') {
+      // Camera frame wasn't ready yet — ask again
       await supabase.from('profiles').update({ camera_status: 'pending' }).eq('id', profileId);
+      pendingSince = Date.now();
+    }
+    if (status === 'pending' && Date.now() - pendingSince > 20_000) {
+      throw new Error('The Pi did not pick up the request. Make sure door_guard.py is running and the Pi is in ENROLLMENT mode.');
     }
   }
 
+  await supabase.from('profiles').update({ camera_status: 'idle' }).eq('id', profileId);
   throw new Error('Enrollment timed out. Make sure door_guard.py is running and the Pi camera is active.');
 }
 
@@ -531,7 +579,7 @@ export async function getPiModeFromDatabase(): Promise<string> {
     if (error) throw error;
     return typeof data?.mode === 'string' ? data.mode : 'recognition';
   } catch (error) {
-    console.error('Error getting Pi mode from database:', error);
+    console.warn('Error getting Pi mode from database:', error);
     return 'recognition';
   }
 }
@@ -553,7 +601,7 @@ export async function setPiModeInDatabase(mode: 'recognition' | 'enrollment' | '
 
     if (error) throw error;
   } catch (error) {
-    console.error('Error setting Pi mode in database:', error);
+    console.warn('Error setting Pi mode in database:', error);
     throw error;
   }
 }

@@ -183,22 +183,29 @@ export function FacultyManagementScreen() {
   };
 
   const removeFaculty = (profile: Profile) => {
-    Alert.alert('Delete faculty?', `This will delete ${profile.name}.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteFaculty(profile.id);
-            if (selectedFaculty?.id === profile.id) resetForm();
-            await loadFaculty();
-          } catch (error) {
-            Alert.alert('Unable to delete faculty', getErrorMessage(error));
-          }
+    Alert.alert(
+      'Delete faculty?',
+      `This will delete ${profile.name}, their face data and lab schedules. Past access logs are kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Deselect first so the 3-second status poller stops querying the deleted row
+              if (selectedFaculty?.id === profile.id) resetForm();
+              await deleteFaculty(profile.id);
+              setFaculty((rows) => rows.filter((r) => r.id !== profile.id));
+              await loadFaculty();
+            } catch (error) {
+              Alert.alert('Unable to delete faculty', getErrorMessage(error));
+              loadFaculty().catch(() => {});
+            }
+          },
         },
-      },
-    ]);
+      ],
+    );
   };
 
   // Poll Pi status
@@ -214,26 +221,25 @@ export function FacultyManagementScreen() {
 
       // Check and reset stale enrollment status for selected faculty
       if (selectedFaculty) {
+        // maybeSingle: the row may have just been deleted (single() throws -> red error box)
         const { data } = await supabase
           .from('profiles')
           .select('camera_status')
           .eq('id', selectedFaculty.id)
-          .single();
+          .maybeSingle();
 
         if (data?.camera_status) {
           const newStatus = data.camera_status;
           setEnrollmentStatus(newStatus);
 
           // Auto-reset failed status after 3 seconds
-          if (newStatus === 'failed_camera_offline' ||
-            newStatus === 'failed_camera_error' ||
-            newStatus === 'failed_no_face' ||
-            newStatus.startsWith('failed_spoof')) {
+          if (!enrollingPi && newStatus.startsWith('failed')) {
 
             if (resetTimerRef.current) {
               clearTimeout(resetTimerRef.current);
             }
 
+            if (resetTimerRef.current) return; // a reset is already scheduled
             resetTimerRef.current = setTimeout(async () => {
               console.log('🔄 Auto-resetting stale enrollment status...');
               await supabase
@@ -243,15 +249,15 @@ export function FacultyManagementScreen() {
               await loadFaculty();
               setEnrollmentStatus('idle');
               resetTimerRef.current = null;
-            }, 3000);
+            }, 6000);
           }
         }
       }
     } catch (error) {
-      console.error('❌ Polling error:', error);
+      console.warn('Polling error:', error);
       setPiStatus({ online: false, cameraReady: false, faceDetected: false, message: 'Server unreachable', mode: 'unknown' });
     }
-  }, [piIp, selectedFaculty]);
+  }, [piIp, selectedFaculty, enrollingPi, loadFaculty]);
 
   useEffect(() => {
     pollStatus();
@@ -273,13 +279,13 @@ export function FacultyManagementScreen() {
     }
   };
 
-  const captureViaPiWithCountdown = async (delaySeconds: number = 0) => {
+  const captureViaPiWithCountdown = async (delaySeconds: number = 0, skipModeCheck: boolean = false) => {
     if (!selectedFaculty) {
       Alert.alert('Select faculty', 'Save or select a faculty member before face enrollment.');
       return;
     }
 
-    if (currentMode !== 'enrollment') {
+    if (!skipModeCheck && currentMode !== 'enrollment') {
       Alert.alert(
         'Wrong Mode',
         'Pi is currently in RECOGNITION mode. Switch to ENROLLMENT mode first.',
@@ -289,7 +295,8 @@ export function FacultyManagementScreen() {
             text: 'Switch to Enrollment',
             onPress: async () => {
               await switchPiMode('enrollment');
-              captureViaPiWithCountdown(delaySeconds);
+              // currentMode in this closure is stale, so skip the check on the retry
+              captureViaPiWithCountdown(delaySeconds, true);
             }
           }
         ]
@@ -297,12 +304,11 @@ export function FacultyManagementScreen() {
       return;
     }
 
+    if (resetTimerRef.current) {
+      clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
     setEnrollmentStatus('pending');
-    await supabase
-      .from('profiles')
-      .update({ camera_status: 'pending' })
-      .eq('id', selectedFaculty.id);
-
     setEnrollingPi(true);
     if (delaySeconds > 0) {
       for (let i = delaySeconds; i > 0; i--) {
@@ -313,17 +319,24 @@ export function FacultyManagementScreen() {
     }
 
     try {
-      const updated = await enrollFacultyFaceViaPi(selectedFaculty.id, piIp, 0);
+      const updated = await enrollFacultyFaceViaPi(selectedFaculty.id, piIp, 0, (status) => {
+        if (status) setEnrollmentStatus(status);
+      });
       setSelectedFaculty(updated);
       setEnrollmentStatus('completed');
       await loadFaculty();
       Alert.alert('Pi Camera Capture Successful! ✅', `Facial data registered for ${updated.name}.`);
     } catch (error) {
       const errMsg = getErrorMessage(error);
-      if (errMsg.toLowerCase().includes('rejected') || errMsg.toLowerCase().includes('spoof') || errMsg.toLowerCase().includes('glare')) {
-        setEnrollmentStatus(`failed_spoof: ${errMsg.replace(/Enrollment rejected:\s*/i, '').trim()}`);
-      } else if (errMsg.toLowerCase().includes('no face')) {
+      const lower = errMsg.toLowerCase();
+      if (lower.includes('already registered')) {
+        setEnrollmentStatus(`failed_duplicate: ${errMsg.replace(/Enrollment rejected:\s*/i, '').trim()}`);
+      } else if (lower.includes('liveness') || lower.includes('spoof')) {
+        setEnrollmentStatus(`failed_spoof: ${errMsg.replace(/Enrollment rejected \(liveness\):\s*/i, '').trim()}`);
+      } else if (lower.includes('no face')) {
         setEnrollmentStatus('failed_no_face');
+      } else if (lower.includes('timed out')) {
+        setEnrollmentStatus(`failed_timeout: ${errMsg.replace(/Enrollment timed out:\s*/i, '').trim()}`);
       } else {
         setEnrollmentStatus('failed');
       }
@@ -356,11 +369,20 @@ export function FacultyManagementScreen() {
       case 'failed_no_face':
         return { text: 'No face detected', color: Colors.danger };
       default: {
+        const detail = enrollmentStatus.includes(':')
+          ? enrollmentStatus.substring(enrollmentStatus.indexOf(':') + 1).trim()
+          : '';
+        if (enrollmentStatus.startsWith('capturing')) {
+          return { text: detail ? `Pi: ${detail}` : 'Pi is capturing…', color: '#3b82f6' };
+        }
+        if (enrollmentStatus.startsWith('failed_duplicate')) {
+          return { text: detail || 'Face already registered to another faculty', color: Colors.danger };
+        }
+        if (enrollmentStatus.startsWith('failed_timeout')) {
+          return { text: detail ? `Timed out: ${detail}` : 'Timed out — follow the Pi prompts', color: Colors.danger };
+        }
         if (enrollmentStatus.startsWith('failed_spoof')) {
-          const detail = enrollmentStatus.includes(':')
-            ? enrollmentStatus.substring(enrollmentStatus.indexOf(':') + 1).trim()
-            : '';
-          return { text: detail ? `Spoof rejected: ${detail}` : 'Photo / Spoof rejected', color: Colors.danger };
+          return { text: detail ? `Liveness failed: ${detail}` : 'Liveness check failed', color: Colors.danger };
         }
         return { text: enrollmentStatus || 'Idle', color: Colors.textSecondary };
       }
@@ -575,6 +597,16 @@ export function FacultyManagementScreen() {
               loading={enrollingPi && countdown !== null}
               onPress={() => captureViaPiWithCountdown(3)}
             />
+          </View>
+
+          <View style={styles.hintBox}>
+            <Text style={styles.hintTitle}>How enrollment works</Text>
+            <Text style={styles.hintText}>
+              1. The faculty stands alone in front of the Pi camera and looks straight.{'\n'}
+              2. Follow the prompts on the Pi screen (also shown above): turn LEFT / RIGHT / UP / DOWN in a random
+              order, looking straight again after each one.{'\n'}
+              3. Photos, phone screens and faces already registered to someone else are rejected.
+            </Text>
           </View>
 
 
@@ -1039,6 +1071,23 @@ const styles = StyleSheet.create({
   rowActions: {
     flexDirection: 'row',
     gap: 8,
+  },
+  hintBox: {
+    marginTop: Spacing.sm,
+    padding: Spacing.sm,
+    borderRadius: Radius.md,
+    backgroundColor: '#EFF6FF',
+  },
+  hintTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  hintText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.textSecondary,
   },
   deleteBtn: {
     paddingHorizontal: 12,

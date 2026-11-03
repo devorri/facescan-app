@@ -21,6 +21,52 @@ export type AuthUser = {
 // Alias for backward compatibility
 export type AdminUser = AuthUser;
 
+const normalizeName = (v: string | null | undefined) => (v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Escape a value for use inside a PostgREST .or() filter. */
+const pgrstValue = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+/**
+ * Pick the profile matching the user's input.
+ * Exact email / name / phone first. A partial name match is only accepted when it
+ * is UNIQUE and the input is at least 4 characters — the old code accepted any
+ * substring (and empty names), which could pick the WRONG person's account.
+ */
+function pickProfile<T extends { name?: string | null; email?: string | null; phone?: string | null; avatar_url?: string | null }>(
+  rows: T[],
+  input: string,
+): T | null {
+  const lower = input.trim().toLowerCase();
+  const norm = normalizeName(input);
+  const phone = normalizePhilippineMobile(input);
+  const isPhoneLike = /^09\d{9}$/.test(phone);
+
+  const phoneOf = (p: T) =>
+    p.phone
+      ? normalizePhilippineMobile(p.phone)
+      : p.avatar_url?.startsWith('phone:')
+      ? normalizePhilippineMobile(p.avatar_url.replace('phone:', ''))
+      : '';
+
+  const exact = rows.filter((p) => {
+    const pEmail = (p.email || '').toLowerCase().trim();
+    const pName = normalizeName(p.name);
+    return (
+      (pEmail && pEmail === lower) ||
+      (pName && pName === norm) ||
+      (isPhoneLike && phoneOf(p) === phone)
+    );
+  });
+  if (exact.length >= 1) return exact[0];
+
+  if (norm.length < 4) return null;
+  const partial = rows.filter((p) => {
+    const pName = normalizeName(p.name);
+    return pName.length >= 4 && pName.includes(norm);
+  });
+  return partial.length === 1 ? partial[0] : null;
+}
+
 /**
  * Signs in using the custom public.admins table or profiles table (email/username + password),
  * and associates with profile to determine role (custodian vs faculty).
@@ -37,27 +83,17 @@ export async function signIn(usernameOrEmail: string, password: string): Promise
     .maybeSingle();
 
   // 2. Query profiles table (by email or name)
-  let { data: profileRow } = await supabase
+  const { data: directMatches } = await supabase
     .from('profiles')
     .select('*')
-    .or(`name.ilike.${cleanInput},email.ilike.${cleanInput}`)
-    .maybeSingle();
+    .or(`name.ilike.${pgrstValue(cleanInput)},email.ilike.${pgrstValue(cleanInput)}`)
+    .limit(1);
+  let profileRow: Profile | null = directMatches?.[0] ?? null;
 
   // Fallback profile lookup if no direct match
   if (!profileRow) {
-    const { data: allProfiles } = await supabase
-      .from('profiles')
-      .select('*');
-
-    if (allProfiles && allProfiles.length > 0) {
-      const cleanLower = cleanInput.toLowerCase().replace(/[^a-z0-9]/g, '');
-      profileRow =
-        allProfiles.find((p) => {
-          const pName = (p.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          const pEmail = (p.email || '').toLowerCase().trim();
-          return pEmail === cleanInput.toLowerCase() || pName === cleanLower || pName.includes(cleanLower) || cleanLower.includes(pName);
-        }) ?? null;
-    }
+    const { data: allProfiles } = await supabase.from('profiles').select('*');
+    profileRow = allProfiles ? pickProfile(allProfiles, cleanInput) : null;
   }
 
   // 3. If admin row found, link with profile
@@ -319,6 +355,8 @@ export type AccountLookupResult = {
   maskedPhone: string | null;
   hasEmail: boolean;
   hasPhone: boolean;
+  /** admins.username linked to this account (so a reset updates the right login). */
+  adminUsername?: string | null;
 };
 
 type OtpSession = {
@@ -328,7 +366,12 @@ type OtpSession = {
   cooldownUntil: number;
   channel: PasswordResetChannel;
   destination: string;
+  attempts: number;
+  adminUsername?: string | null;
 };
+
+const MAX_OTP_ATTEMPTS = 5;
+const adminUsernameByProfile = new Map<string, string>();
 
 const otpSessions = new Map<string, OtpSession>();
 
@@ -351,87 +394,37 @@ export async function findAccountForPasswordReset(identifier: string): Promise<A
     throw new Error('Please enter your username, email, or mobile number.');
   }
 
-  // 1. Fetch all profiles to find by name, email, or phone
-  let profileRow: any = null;
-
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, name, role, email, phone, avatar_url, password_plain');
-
-    if (!error && data) {
-      const cleanLower = clean.toLowerCase();
-      const cleanPhone = normalizePhilippineMobile(clean);
-
-      profileRow = data.find((p) => {
-        const pEmail = (p.email || '').toLowerCase().trim();
-        const pName = (p.name || '').toLowerCase().trim();
-        const pPhone = p.phone ? normalizePhilippineMobile(p.phone) : '';
-        const pAvatarPhone = p.avatar_url?.startsWith('phone:')
-          ? normalizePhilippineMobile(p.avatar_url.replace('phone:', ''))
-          : '';
-
-        return (
-          pEmail === cleanLower ||
-          pName === cleanLower ||
-          (cleanPhone.length >= 7 && (pPhone === cleanPhone || pAvatarPhone === cleanPhone)) ||
-          pName.includes(cleanLower) ||
-          cleanLower.includes(pName)
-        );
-      });
-    }
-  } catch (err) {
-    console.warn('Profiles query with phone column fallback:', err);
+  // 1. Admin username typed? Remember it so the reset updates that login too.
+  let adminUsername: string | null = null;
+  const { data: adminRows } = await supabase
+    .from('admins')
+    .select('id, username')
+    .ilike('username', clean)
+    .limit(1);
+  if (adminRows && adminRows.length > 0) {
+    adminUsername = adminRows[0].username;
   }
 
-  // Fallback if column phone is missing
-  if (!profileRow) {
+  // 2. Find the profile by email / name / phone (exact first, unique partial second)
+  let profileRow: any = null;
+  const { data: withPhone, error: withPhoneErr } = await supabase
+    .from('profiles')
+    .select('id, name, role, email, phone, avatar_url');
+
+  if (!withPhoneErr && withPhone) {
+    profileRow = pickProfile(withPhone as any[], clean);
+  } else {
+    // Fallback if column phone is missing
     const { data: fallbackProfiles } = await supabase
       .from('profiles')
-      .select('id, name, role, email, avatar_url, password_plain');
-
-    if (fallbackProfiles && fallbackProfiles.length > 0) {
-      const cleanLower = clean.toLowerCase();
-      const cleanPhone = normalizePhilippineMobile(clean);
-
-      profileRow = fallbackProfiles.find((p) => {
-        const pEmail = (p.email || '').toLowerCase().trim();
-        const pName = (p.name || '').toLowerCase().trim();
-        const pAvatarPhone = p.avatar_url?.startsWith('phone:')
-          ? normalizePhilippineMobile(p.avatar_url.replace('phone:', ''))
-          : '';
-
-        return (
-          pEmail === cleanLower ||
-          pName === cleanLower ||
-          (cleanPhone.length >= 7 && pAvatarPhone === cleanPhone) ||
-          pName.includes(cleanLower) ||
-          cleanLower.includes(pName)
-        );
-      });
-    }
+      .select('id, name, role, email, avatar_url');
+    profileRow = fallbackProfiles ? pickProfile(fallbackProfiles as any[], clean) : null;
   }
 
-  // 2. If not found in profiles, check admins table
-  if (!profileRow) {
-    const { data: adminRow } = await supabase
-      .from('admins')
-      .select('id, username')
-      .ilike('username', clean)
-      .maybeSingle();
-
-    if (adminRow) {
-      // Find matching profile for this admin
-      const { data: matchedProfile } = await supabase
-        .from('profiles')
-        .select('id, name, role, email, phone, avatar_url')
-        .ilike('name', adminRow.username)
-        .maybeSingle();
-
-      if (matchedProfile) {
-        profileRow = matchedProfile;
-      }
-    }
+  // 3. Admin username without a direct profile hit -> profile with the same name
+  if (!profileRow && adminUsername) {
+    const { data: rows } = await supabase.from('profiles').select('*');
+    profileRow = rows ? pickProfile(rows as any[], adminUsername) : null;
   }
 
   if (!profileRow) {
@@ -455,9 +448,16 @@ export async function findAccountForPasswordReset(identifier: string): Promise<A
     );
   }
 
+  if (adminUsername) {
+    adminUsernameByProfile.set(profileRow.id, adminUsername);
+  } else {
+    adminUsernameByProfile.delete(profileRow.id);
+  }
+
   return {
     profileId: profileRow.id,
     name: profileRow.name,
+    adminUsername,
     email,
     phone,
     maskedEmail: email ? maskEmail(email) : null,
@@ -489,14 +489,27 @@ export async function requestPasswordResetOtp(
   }
 
   // 2. Get profile contact details
-  const { data: profile, error } = await supabase
+  let profile: any = null;
+  const { data: profileWithPhone, error: phoneErr } = await supabase
     .from('profiles')
     .select('id, name, email, phone, avatar_url')
     .eq('id', profileId)
-    .single();
+    .maybeSingle();
 
-  if (error || !profile) {
-    throw new Error('Account record could not be found.');
+  if (!phoneErr && profileWithPhone) {
+    profile = profileWithPhone;
+  } else {
+    // Fallback if column 'phone' does not exist in profiles schema
+    const { data: profileFallback, error: fbErr } = await supabase
+      .from('profiles')
+      .select('id, name, email, avatar_url')
+      .eq('id', profileId)
+      .maybeSingle();
+
+    if (fbErr || !profileFallback) {
+      throw new Error('Account record could not be found.');
+    }
+    profile = profileFallback;
   }
 
   const email = profile.email ? profile.email.trim() : null;
@@ -507,7 +520,7 @@ export async function requestPasswordResetOtp(
     : null;
 
   // 3. Generate 6-digit OTP
-  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  let otpCode = Math.floor(100000 + Math.random() * 900000).toString();
 
   // 4. Dispatch OTP
   let destinationMasked = '';
@@ -516,11 +529,15 @@ export async function requestPasswordResetOtp(
     if (!phone) {
       throw new Error(`No mobile number registered for ${profile.name}. Please select Email instead.`);
     }
-    await sendSmsOtp({
+    const sent = await sendSmsOtp({
       toPhone: phone,
       otpCode,
       facultyName: profile.name,
     });
+    // Semaphore can return its own generated code — always verify against what was delivered
+    if (sent.deliveredCode && /^\d{6}$/.test(sent.deliveredCode)) {
+      otpCode = sent.deliveredCode;
+    }
     destinationMasked = maskPhone(phone);
   } else {
     if (!email) {
@@ -542,6 +559,8 @@ export async function requestPasswordResetOtp(
     cooldownUntil: Date.now() + 60 * 1000,
     channel,
     destination: channel === 'sms' ? phone! : email!,
+    attempts: 0,
+    adminUsername: adminUsernameByProfile.get(profileId) ?? null,
   });
 
   return {
@@ -583,7 +602,13 @@ export async function verifyOtpAndResetPassword(
   }
 
   if (session.otp !== cleanCode) {
-    throw new Error('Invalid verification code. Please check the 6-digit code and try again.');
+    session.attempts += 1;
+    if (session.attempts >= MAX_OTP_ATTEMPTS) {
+      otpSessions.delete(profileId);
+      throw new Error('Too many wrong codes. Please request a new verification code.');
+    }
+    const left = MAX_OTP_ATTEMPTS - session.attempts;
+    throw new Error(`Invalid verification code. ${left} attempt(s) left.`);
   }
 
   // 1. Fetch profile
@@ -608,10 +633,28 @@ export async function verifyOtpAndResetPassword(
 
   // 3. Update admins table if matching admin account exists
   if (profile) {
-    await supabase
-      .from('admins')
-      .update({ password: cleanPassword })
-      .or(`username.ilike.${profile.name},username.ilike.${profile.email || 'non_existent_key'}`);
+    try {
+      if (session.adminUsername) {
+        await supabase
+          .from('admins')
+          .update({ password: cleanPassword })
+          .ilike('username', session.adminUsername);
+      }
+      if (profile.name) {
+        await supabase
+          .from('admins')
+          .update({ password: cleanPassword })
+          .ilike('username', profile.name);
+      }
+      if (profile.email) {
+        await supabase
+          .from('admins')
+          .update({ password: cleanPassword })
+          .ilike('username', profile.email);
+      }
+    } catch (adminSyncErr) {
+      console.warn('Admins table sync warning:', adminSyncErr);
+    }
   }
 
   // Clear OTP session
