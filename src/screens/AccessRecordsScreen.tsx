@@ -76,10 +76,31 @@ function AccessRecordRow({ log }: { log: AccessLogWithRelations }) {
   const createdAt = new Date(log.created_at);
   const granted = log.decision === 'granted';
   const isLate = (log.reason?.toLowerCase().includes('late')) ?? false;
+  const isExit = (log.reason?.toLowerCase().includes('exit') || Boolean(log.exited_at)) ?? false;
 
-  const badgeStyle = !granted ? styles.deniedBadge : isLate ? styles.lateBadge : styles.grantedBadge;
-  const textStyle = !granted ? styles.deniedText : isLate ? styles.lateText : styles.grantedText;
-  const indicatorColor = !granted ? Colors.danger : isLate ? '#D97706' : Colors.success;
+  const badgeStyle = !granted
+    ? styles.deniedBadge
+    : isExit
+    ? styles.exitBadge
+    : isLate
+    ? styles.lateBadge
+    : styles.grantedBadge;
+
+  const textStyle = !granted
+    ? styles.deniedText
+    : isExit
+    ? styles.exitText
+    : isLate
+    ? styles.lateText
+    : styles.grantedText;
+
+  const indicatorColor = !granted
+    ? Colors.danger
+    : isExit
+    ? '#2563EB'
+    : isLate
+    ? '#D97706'
+    : Colors.success;
 
   return (
     <View style={[styles.row, Shadow.sm]}>
@@ -90,7 +111,7 @@ function AccessRecordRow({ log }: { log: AccessLogWithRelations }) {
         </View>
         <View style={[styles.badge, badgeStyle]}>
           <Text style={[styles.badgeText, textStyle]}>
-            {!granted ? 'DENIED' : isLate ? 'LATE' : 'GRANTED'}
+            {!granted ? 'DENIED' : isExit ? 'EXIT' : isLate ? 'LATE' : 'GRANTED'}
           </Text>
         </View>
       </View>
@@ -250,6 +271,9 @@ const styles = StyleSheet.create({
   lateBadge: {
     backgroundColor: '#FEF3C7',
   },
+  exitBadge: {
+    backgroundColor: '#DBEAFE',
+  },
   deniedBadge: {
     backgroundColor: Colors.dangerBg,
   },
@@ -263,6 +287,9 @@ const styles = StyleSheet.create({
   },
   lateText: {
     color: '#D97706',
+  },
+  exitText: {
+    color: '#2563EB',
   },
   deniedText: {
     color: Colors.danger,

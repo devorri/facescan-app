@@ -4,6 +4,8 @@ import type { Profile } from '../types/database';
 export type CreateFacultyInput = {
   name: string;
   role: string;
+  email?: string;
+  phone?: string;
 };
 
 export type UpdateFacultyInput = CreateFacultyInput & {
@@ -23,16 +25,51 @@ export type PiStatus = {
 };
 
 export async function createFaculty(input: CreateFacultyInput): Promise<Profile> {
+  const cleanName = input.name.trim();
+  const cleanRole = input.role.trim();
+  const cleanEmail = input.email?.trim() || null;
+  const cleanPhone = input.phone?.trim() || null;
+
+  // Attempt insert with phone column
+  const payload: Record<string, unknown> = {
+    name: cleanName,
+    role: cleanRole,
+    email: cleanEmail,
+    phone: cleanPhone,
+  };
+
   const { data, error } = await supabase
     .from('profiles')
-    .insert({
-      name: input.name.trim(),
-      role: input.role.trim(),
-    })
+    .insert(payload as any)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    // If column 'phone' does not exist yet in DB schema, fallback gracefully
+    if (error.code === 'PGRST204' || error.message?.includes('phone')) {
+      console.warn('⚠️ Supabase profiles table does not have "phone" column yet. Falling back to avatar_url storage.');
+      const fallbackPayload: Record<string, unknown> = {
+        name: cleanName,
+        role: cleanRole,
+        email: cleanEmail,
+        avatar_url: cleanPhone ? `phone:${cleanPhone}` : null,
+      };
+
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('profiles')
+        .insert(fallbackPayload as any)
+        .select()
+        .single();
+
+      if (fallbackError) throw fallbackError;
+      return {
+        ...fallbackData,
+        phone: cleanPhone,
+      };
+    }
+    throw error;
+  }
+
   return data;
 }
 
@@ -107,27 +144,87 @@ export async function enrollFacultyFace(profileId: string, imageBase64: string):
 }
 
 export async function listFaculty(): Promise<Profile[]> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, name, role, face_embedding, created_at, camera_status')
-    .order('name', { ascending: true });
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, name, role, face_embedding, created_at, camera_status, email, phone, avatar_url')
+      .order('name', { ascending: true });
 
-  if (error) throw error;
-  return data ?? [];
+    if (!error && data) {
+      return data.map((item) => ({
+        ...item,
+        phone: item.phone || (item.avatar_url?.startsWith('phone:') ? item.avatar_url.replace('phone:', '') : null),
+      }));
+    }
+
+    if (error && (error.code === 'PGRST204' || error.message?.includes('phone'))) {
+      // Fallback if column phone doesn't exist
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('profiles')
+        .select('id, name, role, face_embedding, created_at, camera_status, email, avatar_url')
+        .order('name', { ascending: true });
+
+      if (fallbackError) throw fallbackError;
+      return (fallbackData ?? []).map((item) => ({
+        ...item,
+        phone: item.avatar_url?.startsWith('phone:') ? item.avatar_url.replace('phone:', '') : null,
+      }));
+    }
+
+    if (error) throw error;
+    return data ?? [];
+  } catch (err) {
+    console.error('Error in listFaculty:', err);
+    throw err;
+  }
 }
 
 export async function updateFaculty(input: UpdateFacultyInput): Promise<Profile> {
+  const cleanName = input.name.trim();
+  const cleanRole = input.role.trim();
+  const cleanEmail = input.email !== undefined ? (input.email.trim() || null) : undefined;
+  const cleanPhone = input.phone !== undefined ? (input.phone.trim() || null) : undefined;
+
+  const updatePayload: Record<string, unknown> = {
+    name: cleanName,
+    role: cleanRole,
+  };
+  if (cleanEmail !== undefined) updatePayload.email = cleanEmail;
+  if (cleanPhone !== undefined) updatePayload.phone = cleanPhone;
+
   const { data, error } = await supabase
     .from('profiles')
-    .update({
-      name: input.name.trim(),
-      role: input.role.trim(),
-    })
+    .update(updatePayload as any)
     .eq('id', input.id)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (error.code === 'PGRST204' || error.message?.includes('phone')) {
+      console.warn('⚠️ Supabase profiles table does not have "phone" column yet. Falling back to avatar_url.');
+      const fallbackPayload: Record<string, unknown> = {
+        name: cleanName,
+        role: cleanRole,
+      };
+      if (cleanEmail !== undefined) fallbackPayload.email = cleanEmail;
+      if (cleanPhone !== undefined) fallbackPayload.avatar_url = cleanPhone ? `phone:${cleanPhone}` : null;
+
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('profiles')
+        .update(fallbackPayload as any)
+        .eq('id', input.id)
+        .select()
+        .single();
+
+      if (fallbackError) throw fallbackError;
+      return {
+        ...fallbackData,
+        phone: cleanPhone || null,
+      };
+    }
+    throw error;
+  }
+
   return data;
 }
 
@@ -356,6 +453,12 @@ export async function enrollFacultyFaceViaPi(
     if (profile?.camera_status === 'completed' && profile.face_embedding) {
       console.log('✅ Enrollment completed via Supabase!');
       return profile;
+    }
+    if (profile?.camera_status?.startsWith('failed_spoof')) {
+      const detail = profile.camera_status.includes(':')
+        ? profile.camera_status.substring(profile.camera_status.indexOf(':') + 1).trim()
+        : 'Photo / screen presentation detected. A live person must stand in front of the camera.';
+      throw new Error(`Enrollment rejected: ${detail}`);
     }
     if (profile?.camera_status === 'failed_no_face') {
       throw new Error('Pi Camera captured but no face was detected. Stand closer to the camera.');

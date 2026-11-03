@@ -1,5 +1,11 @@
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { Colors, Radius, Shadow } from '../constants/design';
+
+const FONT_ARIAL = Platform.select({
+  ios: 'Arial',
+  android: 'sans-serif',
+  default: 'Arial, sans-serif',
+});
 
 type AppButtonProps = {
   label: string;
@@ -68,6 +74,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0.2,
+    fontFamily: FONT_ARIAL,
   },
   secondaryLabel: {
     color: Colors.textPrimary,

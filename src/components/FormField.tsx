@@ -1,5 +1,11 @@
-import { StyleSheet, Text, TextInput, TextInputProps, View } from 'react-native';
+import { Platform, StyleSheet, Text, TextInput, TextInputProps, View } from 'react-native';
 import { Colors, Radius, Spacing } from '../constants/design';
+
+const FONT_ARIAL = Platform.select({
+  ios: 'Arial',
+  android: 'sans-serif',
+  default: 'Arial, sans-serif',
+});
 
 type FormFieldProps = TextInputProps & {
   label: string;
@@ -28,6 +34,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 0.1,
+    fontFamily: FONT_ARIAL,
   },
   input: {
     backgroundColor: Colors.card,
@@ -39,5 +46,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     fontSize: 15,
     fontWeight: '600',
+    fontFamily: FONT_ARIAL,
   },
 });

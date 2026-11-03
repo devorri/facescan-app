@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Eye, EyeOff, Lock, Scan, ShieldCheck, Sparkles, User } from 'lucide-react-native';
 import { AppButton } from '../components/AppButton';
+import { ForgotPasswordModal } from '../components/ForgotPasswordModal';
 import { FormField } from '../components/FormField';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import { AdminUser, signIn } from '../services/authService';
@@ -28,6 +29,7 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [forgotPasswordVisible, setForgotPasswordVisible] = useState(false);
 
   const submit = async () => {
     if (!username.trim() || !password) {
@@ -100,17 +102,17 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
                   <Scan size={20} color={Colors.blueLight} strokeWidth={2.2} />
                 </View>
                 <View>
-                  <Text style={styles.panelTitle}>Administrator Portal</Text>
-                  <Text style={styles.panelSubtitle}>Sign in with authorized credentials</Text>
+                  <Text style={styles.panelTitle}>Authentication Portal</Text>
+                  <Text style={styles.panelSubtitle}>Sign in with username or email</Text>
                 </View>
               </View>
 
               <View style={styles.formContainer}>
                 <FormField
                   autoCapitalize="none"
-                  label="Username"
+                  label="Username or Email"
                   onChangeText={setUsername}
-                  placeholder="admin"
+                  placeholder="admin or instructor@gmail.com"
                   value={username}
                 />
 
@@ -135,6 +137,16 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
                   </TouchableOpacity>
                 </View>
 
+                {/* ── Forgot Password Button ── */}
+                <View style={styles.forgotPasswordRow}>
+                  <TouchableOpacity
+                    onPress={() => setForgotPasswordVisible(true)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                  </TouchableOpacity>
+                </View>
+
                 <View style={styles.buttonWrapper}>
                   <AppButton label="Sign In to Console" loading={loading} onPress={submit} />
                 </View>
@@ -149,6 +161,19 @@ export function LoginScreen({ onSignedIn }: LoginScreenProps) {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* ── Minimalist White Forgot Password Modal ── */}
+        <ForgotPasswordModal
+          visible={forgotPasswordVisible}
+          onClose={() => setForgotPasswordVisible(false)}
+          onSuccess={(recoveredIdentifier) => {
+            if (recoveredIdentifier) setUsername(recoveredIdentifier);
+            Alert.alert(
+              'Password Updated',
+              'You can now sign in using your new password.'
+            );
+          }}
+        />
       </SafeAreaView>
     </ImageBackground>
   );
@@ -294,6 +319,17 @@ const styles = StyleSheet.create({
     right: 12,
     top: 36,
     padding: 6,
+  },
+  forgotPasswordRow: {
+    alignItems: 'flex-end',
+    marginTop: -4,
+    marginBottom: 4,
+  },
+  forgotPasswordText: {
+    color: Colors.blueLight,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   buttonWrapper: {
     marginTop: Spacing.xs,

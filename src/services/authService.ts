@@ -1,5 +1,12 @@
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types/database';
+import {
+  maskEmail,
+  maskPhone,
+  normalizePhilippineMobile,
+  sendEmailOtp,
+  sendSmsOtp,
+} from './notificationService';
 
 export type UserRole = 'custodian' | 'faculty';
 
@@ -15,74 +22,108 @@ export type AuthUser = {
 export type AdminUser = AuthUser;
 
 /**
- * Signs in using the custom public.admins table and associates with
- * profile to determine role (custodian vs faculty).
+ * Signs in using the custom public.admins table or profiles table (email/username + password),
+ * and associates with profile to determine role (custodian vs faculty).
  */
-export async function signIn(username: string, password: string): Promise<AuthUser> {
-  const cleanUsername = username.trim();
+export async function signIn(usernameOrEmail: string, password: string): Promise<AuthUser> {
+  const cleanInput = usernameOrEmail.trim();
 
-  // 1. Check admins table
-  const { data: adminRow, error: adminErr } = await supabase
+  // 1. Try checking admins table directly
+  const { data: adminRow } = await supabase
     .from('admins')
     .select('id, username')
-    .ilike('username', cleanUsername)
+    .ilike('username', cleanInput)
     .eq('password', password)
     .maybeSingle();
 
-  if (adminErr) throw adminErr;
-  if (!adminRow) throw new Error('Invalid username or password.');
-
-  // 2. Query profiles table to determine role and profileId
+  // 2. Query profiles table (by email or name)
   let { data: profileRow } = await supabase
     .from('profiles')
-    .select('id, name, role')
-    .ilike('name', cleanUsername)
+    .select('*')
+    .or(`name.ilike.${cleanInput},email.ilike.${cleanInput}`)
     .maybeSingle();
 
+  // Fallback profile lookup if no direct match
   if (!profileRow) {
-    // Fallback: match without spaces/special chars or partial match
     const { data: allProfiles } = await supabase
       .from('profiles')
-      .select('id, name, role');
+      .select('*');
 
     if (allProfiles && allProfiles.length > 0) {
-      const cleanLower = cleanUsername.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cleanLower = cleanInput.toLowerCase().replace(/[^a-z0-9]/g, '');
       profileRow =
         allProfiles.find((p) => {
-          const pNorm = (p.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          return pNorm === cleanLower || pNorm.includes(cleanLower) || cleanLower.includes(pNorm);
+          const pName = (p.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const pEmail = (p.email || '').toLowerCase().trim();
+          return pEmail === cleanInput.toLowerCase() || pName === cleanLower || pName.includes(cleanLower) || cleanLower.includes(pName);
         }) ?? null;
     }
   }
 
-  // 3. Determine role:
-  // - "admin" username is always the root custodian
-  // - If profile role contains "admin" or "custodian" -> custodian
-  // - Otherwise -> faculty
-  let role: UserRole = 'custodian';
-  const unameLower = cleanUsername.toLowerCase();
+  // 3. If admin row found, link with profile
+  if (adminRow) {
+    let role: UserRole = 'custodian';
+    const unameLower = adminRow.username.toLowerCase();
 
-  if (unameLower === 'admin' || unameLower === 'custodian') {
-    role = 'custodian';
-  } else if (profileRow?.role) {
-    const rLower = profileRow.role.toLowerCase();
-    if (rLower === 'admin' || rLower === 'custodian') {
+    if (unameLower === 'admin' || unameLower === 'custodian') {
       role = 'custodian';
+    } else if (profileRow?.role) {
+      const rLower = profileRow.role.toLowerCase();
+      if (rLower === 'admin' || rLower === 'custodian') {
+        role = 'custodian';
+      } else {
+        role = 'faculty';
+      }
     } else {
       role = 'faculty';
     }
-  } else {
-    // If other account exists in admins without matching profile role, default to faculty
-    role = 'faculty';
+
+    return {
+      id: adminRow.id,
+      username: adminRow.username,
+      role,
+      profileId: profileRow?.id,
+      name: profileRow?.name ?? adminRow.username,
+    };
   }
 
-  return {
-    id: adminRow.id,
-    username: adminRow.username,
-    role,
-    profileId: profileRow?.id,
-    name: profileRow?.name ?? adminRow.username,
-  };
+  // 4. If not found in admins, check if profile password_plain matches or has admin credentials
+  if (profileRow) {
+    // Check if there is an admin row corresponding to profile's name
+    const { data: linkedAdmin } = await supabase
+      .from('admins')
+      .select('id, username')
+      .ilike('username', profileRow.name)
+      .eq('password', password)
+      .maybeSingle();
+
+    if (linkedAdmin) {
+      const rLower = (profileRow.role || '').toLowerCase();
+      const role: UserRole = rLower.includes('admin') || rLower.includes('custodian') ? 'custodian' : 'faculty';
+      return {
+        id: linkedAdmin.id,
+        username: linkedAdmin.username,
+        role,
+        profileId: profileRow.id,
+        name: profileRow.name,
+      };
+    }
+
+    // Check profiles.password_plain directly
+    if (profileRow.password_plain && profileRow.password_plain === password) {
+      const rLower = (profileRow.role || '').toLowerCase();
+      const role: UserRole = rLower.includes('admin') || rLower.includes('custodian') ? 'custodian' : 'faculty';
+      return {
+        id: profileRow.id,
+        username: profileRow.email || profileRow.name,
+        role,
+        profileId: profileRow.id,
+        name: profileRow.name,
+      };
+    }
+  }
+
+  throw new Error('Invalid username, email, or password.');
 }
 
 export async function signOut() {
@@ -262,3 +303,323 @@ export async function createAccount(input: CreateAccountInput): Promise<CreateAc
     message: adminMessage,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OTP & Password Reset Support (EmailJS + Semaphore SMS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PasswordResetChannel = 'email' | 'sms';
+
+export type AccountLookupResult = {
+  profileId: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  maskedEmail: string | null;
+  maskedPhone: string | null;
+  hasEmail: boolean;
+  hasPhone: boolean;
+};
+
+type OtpSession = {
+  otp: string;
+  expiresAt: number;
+  lastSentAt: number;
+  cooldownUntil: number;
+  channel: PasswordResetChannel;
+  destination: string;
+};
+
+const otpSessions = new Map<string, OtpSession>();
+
+/**
+ * Returns remaining cooldown in seconds for the given profile (0 if cooled down).
+ */
+export function getRemainingCooldown(profileId: string): number {
+  const session = otpSessions.get(profileId);
+  if (!session) return 0;
+  const remaining = Math.ceil((session.cooldownUntil - Date.now()) / 1000);
+  return remaining > 0 ? remaining : 0;
+}
+
+/**
+ * Looks up an account in profiles or admins by username, email, or phone number.
+ */
+export async function findAccountForPasswordReset(identifier: string): Promise<AccountLookupResult> {
+  const clean = identifier.trim();
+  if (!clean) {
+    throw new Error('Please enter your username, email, or mobile number.');
+  }
+
+  // 1. Fetch all profiles to find by name, email, or phone
+  let profileRow: any = null;
+
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, name, role, email, phone, avatar_url, password_plain');
+
+    if (!error && data) {
+      const cleanLower = clean.toLowerCase();
+      const cleanPhone = normalizePhilippineMobile(clean);
+
+      profileRow = data.find((p) => {
+        const pEmail = (p.email || '').toLowerCase().trim();
+        const pName = (p.name || '').toLowerCase().trim();
+        const pPhone = p.phone ? normalizePhilippineMobile(p.phone) : '';
+        const pAvatarPhone = p.avatar_url?.startsWith('phone:')
+          ? normalizePhilippineMobile(p.avatar_url.replace('phone:', ''))
+          : '';
+
+        return (
+          pEmail === cleanLower ||
+          pName === cleanLower ||
+          (cleanPhone.length >= 7 && (pPhone === cleanPhone || pAvatarPhone === cleanPhone)) ||
+          pName.includes(cleanLower) ||
+          cleanLower.includes(pName)
+        );
+      });
+    }
+  } catch (err) {
+    console.warn('Profiles query with phone column fallback:', err);
+  }
+
+  // Fallback if column phone is missing
+  if (!profileRow) {
+    const { data: fallbackProfiles } = await supabase
+      .from('profiles')
+      .select('id, name, role, email, avatar_url, password_plain');
+
+    if (fallbackProfiles && fallbackProfiles.length > 0) {
+      const cleanLower = clean.toLowerCase();
+      const cleanPhone = normalizePhilippineMobile(clean);
+
+      profileRow = fallbackProfiles.find((p) => {
+        const pEmail = (p.email || '').toLowerCase().trim();
+        const pName = (p.name || '').toLowerCase().trim();
+        const pAvatarPhone = p.avatar_url?.startsWith('phone:')
+          ? normalizePhilippineMobile(p.avatar_url.replace('phone:', ''))
+          : '';
+
+        return (
+          pEmail === cleanLower ||
+          pName === cleanLower ||
+          (cleanPhone.length >= 7 && pAvatarPhone === cleanPhone) ||
+          pName.includes(cleanLower) ||
+          cleanLower.includes(pName)
+        );
+      });
+    }
+  }
+
+  // 2. If not found in profiles, check admins table
+  if (!profileRow) {
+    const { data: adminRow } = await supabase
+      .from('admins')
+      .select('id, username')
+      .ilike('username', clean)
+      .maybeSingle();
+
+    if (adminRow) {
+      // Find matching profile for this admin
+      const { data: matchedProfile } = await supabase
+        .from('profiles')
+        .select('id, name, role, email, phone, avatar_url')
+        .ilike('name', adminRow.username)
+        .maybeSingle();
+
+      if (matchedProfile) {
+        profileRow = matchedProfile;
+      }
+    }
+  }
+
+  if (!profileRow) {
+    throw new Error(`No account found matching "${clean}". Please verify your details.`);
+  }
+
+  // Extract contact info
+  const email = profileRow.email ? profileRow.email.trim() : null;
+  const phone = profileRow.phone
+    ? profileRow.phone.trim()
+    : profileRow.avatar_url?.startsWith('phone:')
+    ? profileRow.avatar_url.replace('phone:', '').trim()
+    : null;
+
+  const hasEmail = Boolean(email && email.includes('@'));
+  const hasPhone = Boolean(phone && phone.length >= 7);
+
+  if (!hasEmail && !hasPhone) {
+    throw new Error(
+      `Account "${profileRow.name}" does not have an Email or Mobile number configured. Please contact the administrator to update your contact info.`
+    );
+  }
+
+  return {
+    profileId: profileRow.id,
+    name: profileRow.name,
+    email,
+    phone,
+    maskedEmail: email ? maskEmail(email) : null,
+    maskedPhone: phone ? maskPhone(phone) : null,
+    hasEmail,
+    hasPhone,
+  };
+}
+
+export type RequestOtpResult = {
+  success: boolean;
+  channel: PasswordResetChannel;
+  destinationMasked: string;
+  cooldownSeconds: number;
+};
+
+/**
+ * Requests an OTP code sent via either Email (EmailJS) or Mobile SMS (Semaphore).
+ * Enforces a strict 60-second cooldown timer.
+ */
+export async function requestPasswordResetOtp(
+  profileId: string,
+  channel: PasswordResetChannel
+): Promise<RequestOtpResult> {
+  // 1. Check cooldown
+  const remaining = getRemainingCooldown(profileId);
+  if (remaining > 0) {
+    throw new Error(`Please wait ${remaining} second(s) before requesting a new OTP.`);
+  }
+
+  // 2. Get profile contact details
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('id, name, email, phone, avatar_url')
+    .eq('id', profileId)
+    .single();
+
+  if (error || !profile) {
+    throw new Error('Account record could not be found.');
+  }
+
+  const email = profile.email ? profile.email.trim() : null;
+  const phone = profile.phone
+    ? profile.phone.trim()
+    : profile.avatar_url?.startsWith('phone:')
+    ? profile.avatar_url.replace('phone:', '').trim()
+    : null;
+
+  // 3. Generate 6-digit OTP
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+  // 4. Dispatch OTP
+  let destinationMasked = '';
+
+  if (channel === 'sms') {
+    if (!phone) {
+      throw new Error(`No mobile number registered for ${profile.name}. Please select Email instead.`);
+    }
+    await sendSmsOtp({
+      toPhone: phone,
+      otpCode,
+      facultyName: profile.name,
+    });
+    destinationMasked = maskPhone(phone);
+  } else {
+    if (!email) {
+      throw new Error(`No email address registered for ${profile.name}. Please select SMS instead.`);
+    }
+    await sendEmailOtp({
+      toEmail: email,
+      toName: profile.name,
+      otpCode,
+    });
+    destinationMasked = maskEmail(email);
+  }
+
+  // 5. Store session with 10-minute expiry and 60-second cooldown
+  otpSessions.set(profileId, {
+    otp: otpCode,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    lastSentAt: Date.now(),
+    cooldownUntil: Date.now() + 60 * 1000,
+    channel,
+    destination: channel === 'sms' ? phone! : email!,
+  });
+
+  return {
+    success: true,
+    channel,
+    destinationMasked,
+    cooldownSeconds: 60,
+  };
+}
+
+export type ResetPasswordResult = {
+  success: boolean;
+  message: string;
+};
+
+/**
+ * Validates the OTP code and updates the password in both public.profiles and public.admins.
+ */
+export async function verifyOtpAndResetPassword(
+  profileId: string,
+  otpCode: string,
+  newPassword: string
+): Promise<ResetPasswordResult> {
+  const cleanCode = otpCode.trim();
+  const cleanPassword = newPassword.trim();
+
+  if (cleanPassword.length < 6) {
+    throw new Error('New password must be at least 6 characters long.');
+  }
+
+  const session = otpSessions.get(profileId);
+  if (!session) {
+    throw new Error('No active OTP request found. Please request a new verification code.');
+  }
+
+  if (Date.now() > session.expiresAt) {
+    otpSessions.delete(profileId);
+    throw new Error('The verification code has expired (10 minutes). Please request a new code.');
+  }
+
+  if (session.otp !== cleanCode) {
+    throw new Error('Invalid verification code. Please check the 6-digit code and try again.');
+  }
+
+  // 1. Fetch profile
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id, name, email')
+    .eq('id', profileId)
+    .single();
+
+  // 2. Update profiles table
+  const { error: profileUpdateErr } = await supabase
+    .from('profiles')
+    .update({
+      password_plain: cleanPassword,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', profileId);
+
+  if (profileUpdateErr) {
+    console.warn('Could not update profiles.password_plain:', profileUpdateErr);
+  }
+
+  // 3. Update admins table if matching admin account exists
+  if (profile) {
+    await supabase
+      .from('admins')
+      .update({ password: cleanPassword })
+      .or(`username.ilike.${profile.name},username.ilike.${profile.email || 'non_existent_key'}`);
+  }
+
+  // Clear OTP session
+  otpSessions.delete(profileId);
+
+  return {
+    success: true,
+    message: 'Your password has been reset successfully! You can now sign in with your new password.',
+  };
+}
+

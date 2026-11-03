@@ -12,7 +12,15 @@ export type Database = {
           role: string;
           face_embedding: number[] | null;
           camera_status?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          password_plain?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
+          status?: string | null;
+          avatar_url?: string | null;
           created_at: string;
+          updated_at?: string | null;
         };
         Insert: {
           id?: string;
@@ -20,13 +28,29 @@ export type Database = {
           role: string;
           face_embedding?: number[] | null;
           camera_status?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          password_plain?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
+          status?: string | null;
+          avatar_url?: string | null;
           created_at?: string;
+          updated_at?: string | null;
         };
         Update: {
           name?: string;
           role?: string;
           face_embedding?: number[] | null;
           camera_status?: string | null;
+          email?: string | null;
+          phone?: string | null;
+          password_plain?: string | null;
+          first_name?: string | null;
+          last_name?: string | null;
+          status?: string | null;
+          avatar_url?: string | null;
+          updated_at?: string | null;
         };
         Relationships: [];
       };

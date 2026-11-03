@@ -6,6 +6,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Mail,
+  Phone,
   ScanFace,
   ShieldCheck,
   ShieldAlert,
@@ -37,6 +39,8 @@ export function FacultyManagementScreen() {
   const [faculty, setFaculty] = useState<Profile[]>([]);
   const [selectedFaculty, setSelectedFaculty] = useState<Profile | null>(null);
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [accessLevel, setAccessLevel] = useState<'faculty' | 'custodian'>('faculty');
   const [department, setDepartment] = useState('');
   const [loading, setLoading] = useState(true);
@@ -108,6 +112,8 @@ export function FacultyManagementScreen() {
   const resetForm = () => {
     setSelectedFaculty(null);
     setName('');
+    setEmail('');
+    setPhone('');
     setAccessLevel('faculty');
     setDepartment('');
     setEnrollmentStatus('idle');
@@ -121,6 +127,8 @@ export function FacultyManagementScreen() {
   const selectFaculty = (profile: Profile) => {
     setSelectedFaculty(profile);
     setName(profile.name);
+    setEmail(profile.email || '');
+    setPhone(profile.phone || '');
     const isCust = profile.role?.toLowerCase().includes('custodian') || profile.role?.toLowerCase().includes('admin');
     setAccessLevel(isCust ? 'custodian' : 'faculty');
     const cleanDept = (profile.role || '').replace(/^(Custodian|Faculty)\s*[-–:]*\s*/i, '').trim();
@@ -143,12 +151,25 @@ export function FacultyManagementScreen() {
     setSaving(true);
     try {
       const saved = selectedFaculty
-        ? await updateFaculty({ id: selectedFaculty.id, name: name.trim(), role: computedRole })
-        : await createFaculty({ name: name.trim(), role: computedRole });
+        ? await updateFaculty({
+            id: selectedFaculty.id,
+            name: name.trim(),
+            role: computedRole,
+            email: email.trim() || undefined,
+            phone: phone.trim() || undefined,
+          })
+        : await createFaculty({
+            name: name.trim(),
+            role: computedRole,
+            email: email.trim() || undefined,
+            phone: phone.trim() || undefined,
+          });
 
       await loadFaculty();
       setSelectedFaculty(saved);
       setName(saved.name);
+      setEmail(saved.email || '');
+      setPhone(saved.phone || '');
       const isCust = saved.role?.toLowerCase().includes('custodian') || saved.role?.toLowerCase().includes('admin');
       setAccessLevel(isCust ? 'custodian' : 'faculty');
       const cleanDept = (saved.role || '').replace(/^(Custodian|Faculty)\s*[-–:]*\s*/i, '').trim();
@@ -206,7 +227,8 @@ export function FacultyManagementScreen() {
           // Auto-reset failed status after 3 seconds
           if (newStatus === 'failed_camera_offline' ||
             newStatus === 'failed_camera_error' ||
-            newStatus === 'failed_no_face') {
+            newStatus === 'failed_no_face' ||
+            newStatus.startsWith('failed_spoof')) {
 
             if (resetTimerRef.current) {
               clearTimeout(resetTimerRef.current);
@@ -326,8 +348,15 @@ export function FacultyManagementScreen() {
         return { text: 'Camera error', color: Colors.danger };
       case 'failed_no_face':
         return { text: 'No face detected', color: Colors.danger };
-      default:
+      default: {
+        if (enrollmentStatus.startsWith('failed_spoof')) {
+          const detail = enrollmentStatus.includes(':')
+            ? enrollmentStatus.substring(enrollmentStatus.indexOf(':') + 1).trim()
+            : '';
+          return { text: detail ? `Spoof rejected: ${detail}` : 'Photo / Spoof rejected', color: Colors.danger };
+        }
         return { text: enrollmentStatus || 'Idle', color: Colors.textSecondary };
+      }
     }
   };
 
@@ -392,6 +421,23 @@ export function FacultyManagementScreen() {
           value={department}
           onChangeText={setDepartment}
           placeholder="e.g. CCS Instructor, Network Lab"
+        />
+
+        <FormField
+          autoCapitalize="none"
+          keyboardType="email-address"
+          label="Email Address (Gmail)"
+          value={email}
+          onChangeText={setEmail}
+          placeholder="e.g. instructor@gmail.com"
+        />
+
+        <FormField
+          keyboardType="phone-pad"
+          label="Mobile Number (SMS via Semaphore)"
+          value={phone}
+          onChangeText={setPhone}
+          placeholder="e.g. 09171234567"
         />
 
         <View style={styles.actions}>
@@ -584,6 +630,22 @@ export function FacultyManagementScreen() {
                 </View>
               </View>
               <Text style={styles.rowSubtitle}>{item.role}</Text>
+              {(item.email || item.phone) ? (
+                <View style={styles.contactRow}>
+                  {item.email ? (
+                    <View style={styles.contactChip}>
+                      <Mail size={11} color={Colors.textSecondary} />
+                      <Text style={styles.contactText} numberOfLines={1}>{item.email}</Text>
+                    </View>
+                  ) : null}
+                  {item.phone ? (
+                    <View style={styles.contactChip}>
+                      <Phone size={11} color={Colors.textSecondary} />
+                      <Text style={styles.contactText}>{item.phone}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
             </View>
             <View style={styles.rowActions}>
               <TouchableOpacity
@@ -900,6 +962,28 @@ const styles = StyleSheet.create({
   rowSubtitle: {
     color: Colors.textSecondary,
     fontSize: 12,
+    fontWeight: '600',
+  },
+  contactRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  contactChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  contactText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
     fontWeight: '600',
   },
   accessLevelWrapper: {

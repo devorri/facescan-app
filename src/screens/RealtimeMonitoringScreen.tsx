@@ -153,14 +153,37 @@ export function RealtimeMonitoringScreen({
 }
 
 function AccessLogRow({ log }: { log: AccessLogWithRelations }) {
+  const isEnrolled =
+    (log.reason?.toLowerCase().includes('enrolled') ?? false) ||
+    (log.reason?.toLowerCase().includes('enrollment') ?? false) ||
+    (log.decision as string) === 'enrolled';
   const granted = log.decision === 'granted';
-  const isLate = (log.reason?.toLowerCase().includes('late')) ?? false;
+  const isLate = !isEnrolled && ((log.reason?.toLowerCase().includes('late')) ?? false);
   const facultyName = log.profiles?.name ?? (log.reason?.includes('Manual') ? 'Admin Manual Override' : 'Unknown Faculty');
   const labName = log.laboratories?.name ?? 'CCS Laboratory';
 
-  const badgeStyle = !granted ? styles.deniedBadge : isLate ? styles.lateBadge : styles.grantedBadge;
-  const textStyle = !granted ? styles.deniedText : isLate ? styles.lateText : styles.grantedText;
-  const indicatorColor = !granted ? Colors.danger : isLate ? '#D97706' : Colors.success;
+  const badgeStyle = isEnrolled
+    ? styles.enrolledBadge
+    : !granted
+    ? styles.deniedBadge
+    : isLate
+    ? styles.lateBadge
+    : styles.grantedBadge;
+  const textStyle = isEnrolled
+    ? styles.enrolledText
+    : !granted
+    ? styles.deniedText
+    : isLate
+    ? styles.lateText
+    : styles.grantedText;
+  const indicatorColor = isEnrolled
+    ? '#8B5CF6'
+    : !granted
+    ? Colors.danger
+    : isLate
+    ? '#D97706'
+    : Colors.success;
+  const badgeLabel = isEnrolled ? 'ENROLLED' : !granted ? 'FAIL' : isLate ? 'LATE' : 'OK';
 
   return (
     <View style={[styles.row, Shadow.sm]}>
@@ -179,7 +202,7 @@ function AccessLogRow({ log }: { log: AccessLogWithRelations }) {
       </View>
       <View style={[styles.badge, badgeStyle]}>
         <Text style={[styles.badgeText, textStyle]}>
-          {!granted ? 'FAIL' : isLate ? 'LATE' : 'OK'}
+          {badgeLabel}
         </Text>
       </View>
     </View>
@@ -325,6 +348,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     marginRight: Spacing.xs,
+  },
+  enrolledBadge: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
+  enrolledText: {
+    color: '#7C3AED',
   },
   grantedBadge: {
     backgroundColor: Colors.successBg,

@@ -20,6 +20,7 @@ import {
   FileSpreadsheet,
   GraduationCap,
   KeyRound,
+  LogOut,
   MapPin,
   ScanFace,
   ShieldAlert,
@@ -35,6 +36,7 @@ import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import { getRecentAccessLogs } from '../services/accessLogService';
 import type { AuthUser } from '../services/authService';
 import { DashboardCounts, getDashboardCounts } from '../services/dashboardService';
+import { exitLaboratory } from '../services/doorService';
 import { DAYS_OF_WEEK, isFacultyScheduledNow, listSchedules } from '../services/scheduleService';
 import type { AccessLogWithRelations, ScheduleWithRelations } from '../types/database';
 
@@ -57,6 +59,7 @@ export function DashboardScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forceUnlockVisible, setForceUnlockVisible] = useState(false);
+  const [exitingLab, setExitingLab] = useState(false);
 
   const isFaculty = currentUser?.role === 'faculty';
 
@@ -145,6 +148,35 @@ export function DashboardScreen({
         [{ text: 'OK' }],
       );
     }
+  };
+
+  const handleExitLaboratory = () => {
+    Alert.alert(
+      'Exit Laboratory',
+      'Are you ready to exit? This will unlock the door for 5 seconds and log your exit / check-out time in the database.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlock & Exit',
+          style: 'default',
+          onPress: async () => {
+            setExitingLab(true);
+            try {
+              const res = await exitLaboratory({
+                facultyId: currentUser?.profileId,
+                facultyName: currentUser?.name || currentUser?.username || (isFaculty ? 'Faculty Member' : 'Custodian'),
+              });
+              Alert.alert('Door Unlocked for Exit', res.message);
+              await loadData();
+            } catch (err: any) {
+              Alert.alert('Exit Error', err?.message || 'Failed to trigger door exit.');
+            } finally {
+              setExitingLab(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   // Faculty specific metrics computation
@@ -274,6 +306,35 @@ export function DashboardScreen({
           </View>
         </TouchableOpacity>
 
+        {/* ── EXIT LABORATORY ACTION BANNER (Faculty / Instructors Only) ── */}
+        {isFaculty && (
+          <TouchableOpacity
+            style={[styles.exitCard, Shadow.md]}
+            onPress={handleExitLaboratory}
+            disabled={exitingLab}
+            activeOpacity={0.85}
+          >
+            <View style={styles.exitLeft}>
+              <View style={styles.exitIconWrap}>
+                <LogOut size={22} color="#FFFFFF" strokeWidth={2.5} />
+              </View>
+              <View style={styles.forceUnlockTextGroup}>
+                <View style={styles.exitPill}>
+                  <DoorOpen size={12} color="#FFFFFF" />
+                  <Text style={styles.exitPillText}>END OF CLASS / EXIT</Text>
+                </View>
+                <Text style={styles.exitTitle}>Exit Laboratory & Check Out</Text>
+                <Text style={styles.exitSub}>
+                  Unlocks door for 5s & logs your departure in the database
+                </Text>
+              </View>
+            </View>
+            <View style={styles.exitArrow}>
+              <ArrowRight size={18} color="#FFFFFF" strokeWidth={2.5} />
+            </View>
+          </TouchableOpacity>
+        )}
+
         {error && (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}>⚠️ {error}</Text>
@@ -281,86 +342,122 @@ export function DashboardScreen({
         )}
 
         {/* ── Quick Action Shortcuts ── */}
-        <View style={styles.quickActionsRow}>
+        <Text style={styles.sectionHeader}>{isFaculty ? 'Quick Actions' : 'Control Navigation'}</Text>
+        <View style={styles.quickActionsGrid}>
           {isFaculty ? (
             <>
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('schedule')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#F5F3FF' }]}>
-                  <Calendar size={18} color="#7C3AED" strokeWidth={2} />
+                  <Calendar size={20} color="#7C3AED" strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>My Schedule</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Schedule</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Class Timetable</Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={handleForceUnlockPress}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#EBF5FF' }]}>
-                  <Unlock size={18} color={Colors.blue} strokeWidth={2} />
+                  <Unlock size={20} color={Colors.blue} strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>Door Access</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Door Access</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Camera Unlock</Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
+                onPress={handleExitLaboratory}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.actionIconWrap, { backgroundColor: '#EFF6FF' }]}>
+                  <LogOut size={20} color="#2563EB" strokeWidth={2.2} />
+                </View>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Exit Lab</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Check Out</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('profile')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
-                  <UserCircle size={18} color="#D97706" strokeWidth={2} />
+                  <UserCircle size={20} color="#D97706" strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>My Profile</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Profile</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>My Account</Text>
+                </View>
               </TouchableOpacity>
             </>
           ) : (
             <>
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('faculty')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#EBF5FF' }]}>
-                  <ScanFace size={18} color={Colors.blue} strokeWidth={2} />
+                  <ScanFace size={20} color={Colors.blue} strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>Enroll Face</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Enrollment</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Faculty Faces</Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('schedule')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#F5F3FF' }]}>
-                  <Calendar size={18} color="#7C3AED" strokeWidth={2} />
+                  <Calendar size={20} color="#7C3AED" strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>Schedule</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Schedule</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Class Timetable</Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('monitoring')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#D1FAE5' }]}>
-                  <Activity size={18} color={Colors.success} strokeWidth={2} />
+                  <Activity size={20} color={Colors.success} strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>Live Feed</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Live Feed</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Camera & Mode</Text>
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.actionChip}
+                style={styles.actionCard}
                 onPress={() => onNavigateTab?.('reports')}
                 activeOpacity={0.8}
               >
                 <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
-                  <FileSpreadsheet size={18} color="#D97706" strokeWidth={2} />
+                  <FileSpreadsheet size={20} color="#D97706" strokeWidth={2.2} />
                 </View>
-                <Text style={styles.actionChipText}>Reports</Text>
+                <View style={styles.actionCardTextGroup}>
+                  <Text style={styles.actionCardTitle} numberOfLines={1}>Reports</Text>
+                  <Text style={styles.actionCardSub} numberOfLines={1}>Export & Logs</Text>
+                </View>
               </TouchableOpacity>
             </>
           )}
@@ -610,10 +707,14 @@ function MetricCard({
         <ArrowRight size={14} color={Colors.textMuted} strokeWidth={2} />
       </View>
 
-      <Text style={[styles.metricValue, { color: accent }]}>
+      <Text
+        style={[styles.metricValue, { color: accent }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
         {valueText ?? value?.toLocaleString() ?? 0}
       </Text>
-      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricLabel} numberOfLines={1}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -782,6 +883,67 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
 
+  // ── Exit Laboratory Banner ───────────────────
+  exitCard: {
+    backgroundColor: '#1E3A8A',
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+  },
+  exitLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  exitIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exitPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  exitPillText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  exitTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  exitSub: {
+    color: '#BFDBFE',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  exitArrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+
   errorBox: {
     backgroundColor: Colors.dangerBg,
     borderRadius: Radius.sm,
@@ -791,34 +953,44 @@ const styles = StyleSheet.create({
     color: Colors.danger,
     fontWeight: '600',
   },
-  quickActionsRow: {
+  quickActionsGrid: {
     flexDirection: 'row',
-    gap: 10,
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
   },
-  actionChip: {
-    flex: 1,
+  actionCard: {
+    width: '48.5%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Colors.card,
     borderRadius: Radius.md,
-    padding: 10,
-    gap: 8,
+    padding: Spacing.md,
+    gap: 12,
     borderWidth: 1,
     borderColor: Colors.border,
     ...Shadow.sm,
   },
   actionIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionChipText: {
-    color: Colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
+  actionCardTextGroup: {
     flex: 1,
+    gap: 2,
+  },
+  actionCardTitle: {
+    color: Colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  actionCardSub: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
   },
   sectionHeader: {
     color: Colors.textPrimary,
