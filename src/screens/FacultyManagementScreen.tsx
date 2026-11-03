@@ -319,8 +319,15 @@ export function FacultyManagementScreen() {
       await loadFaculty();
       Alert.alert('Pi Camera Capture Successful! ✅', `Facial data registered for ${updated.name}.`);
     } catch (error) {
-      setEnrollmentStatus('failed');
-      Alert.alert('Pi Capture Failed', getErrorMessage(error));
+      const errMsg = getErrorMessage(error);
+      if (errMsg.toLowerCase().includes('rejected') || errMsg.toLowerCase().includes('spoof') || errMsg.toLowerCase().includes('glare')) {
+        setEnrollmentStatus(`failed_spoof: ${errMsg.replace(/Enrollment rejected:\s*/i, '').trim()}`);
+      } else if (errMsg.toLowerCase().includes('no face')) {
+        setEnrollmentStatus('failed_no_face');
+      } else {
+        setEnrollmentStatus('failed');
+      }
+      Alert.alert('Pi Capture Failed', errMsg);
     } finally {
       setEnrollingPi(false);
       setCountdown(null);
