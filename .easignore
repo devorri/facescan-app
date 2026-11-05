@@ -8,3 +8,6 @@ web-build
 # Root duplicates that bloat upload size
 /bg-facescan.png
 /pampanga-logo.png
+
+# Local backups (not part of the app)
+_backup_before_fix_*

@@ -137,13 +137,7 @@ export async function listSchedules(): Promise<ScheduleWithRelations[]> {
     .from('schedules')
     .select(
       `
-        id,
-        faculty_id,
-        laboratory_id,
-        day_of_week,
-        start_time,
-        end_time,
-        created_at,
+        *,
         profiles:faculty_id(id, name, role),
         laboratories:laboratory_id(id, name, location)
       `,

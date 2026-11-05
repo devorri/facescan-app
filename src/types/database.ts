@@ -91,6 +91,10 @@ export type Database = {
           /** Time-of-day string from the DB: "HH:MM:SS" */
           end_time: string;
           created_at: string;
+          /** From Excel import (needs add_schedule_class_details.sql) */
+          subject_code?: string | null;
+          section?: string | null;
+          room?: string | null;
         };
         Insert: {
           id?: string;
@@ -100,6 +104,9 @@ export type Database = {
           start_time: string;
           end_time: string;
           created_at?: string;
+          subject_code?: string | null;
+          section?: string | null;
+          room?: string | null;
         };
         Update: {
           faculty_id?: string;

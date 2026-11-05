@@ -16,6 +16,7 @@ import {
   CalendarDays,
   Clock,
   Eye,
+  FileSpreadsheet,
   PenLine,
   Plus,
   Trash2,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react-native';
 import { AppButton } from '../components/AppButton';
 import { PickerField } from '../components/PickerField';
+import { ScheduleImportModal } from '../components/ScheduleImportModal';
 import { Colors, Radius, Shadow, Spacing } from '../constants/design';
 import { listFaculty } from '../services/facultyService';
 import { listLaboratories } from '../services/laboratoryService';
@@ -153,6 +155,7 @@ export function LaboratorySchedulingScreen({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   // ── Data loading ──────────────────────────────────────────────────────────
 
@@ -454,10 +457,20 @@ export function LaboratorySchedulingScreen({
             </Text>
           </View>
           {!isFacultyUser ? (
-            <TouchableOpacity style={styles.addButton} onPress={openNewForm} activeOpacity={0.8}>
-              <Plus size={20} color={Colors.textWhite} strokeWidth={2.5} />
-              <Text style={styles.addButtonText}>Add</Text>
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                style={styles.importButton}
+                onPress={() => setImportOpen(true)}
+                activeOpacity={0.8}
+              >
+                <FileSpreadsheet size={18} color={Colors.blue} strokeWidth={2.2} />
+                <Text style={styles.importButtonText}>Import</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.addButton} onPress={openNewForm} activeOpacity={0.8}>
+                <Plus size={20} color={Colors.textWhite} strokeWidth={2.5} />
+                <Text style={styles.addButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={styles.viewOnlyBadge}>
               <Eye size={14} color={Colors.blueLight} strokeWidth={2.2} />
@@ -482,7 +495,7 @@ export function LaboratorySchedulingScreen({
             <Text style={styles.emptySubtitle}>
               {isFacultyUser
                 ? "You don't have any laboratory schedules assigned yet. Contact the Laboratory Custodian to register your class schedule."
-                : 'Tap "Add" to assign a faculty schedule'}
+                : 'Tap "Import" to upload an Excel schedule, or "Add" to enter one'}
             </Text>
           </View>
         ) : (
@@ -512,6 +525,11 @@ export function LaboratorySchedulingScreen({
                         ? (item.laboratories?.location ? `Location: ${item.laboratories.location}` : 'Campus Laboratory Room')
                         : (item.laboratories?.name ?? 'Unknown laboratory')}
                     </Text>
+                    {(item.subject_code || item.section) ? (
+                      <Text style={styles.cardClass}>
+                        {[item.subject_code, item.section, item.room].filter(Boolean).join('  ·  ')}
+                      </Text>
+                    ) : null}
                     <View style={styles.timeRow}>
                       <Clock size={12} color={Colors.blue} strokeWidth={2} />
                       <Text style={styles.timeText}>
@@ -543,6 +561,16 @@ export function LaboratorySchedulingScreen({
           ))
         )}
       </ScrollView>
+
+      {/* ── Excel Import ── */}
+      <ScheduleImportModal
+        visible={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={loadData}
+        faculty={faculty}
+        labs={labs}
+        schedules={schedules}
+      />
 
       {/* ── Form Modal ── */}
       <Modal
@@ -754,6 +782,27 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: -2,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  importButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.blue,
+    gap: 6,
+  },
+  importButtonText: {
+    color: Colors.blue,
+    fontSize: 14,
+    fontWeight: '700',
+  },
   addButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -897,6 +946,11 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     fontSize: 12,
     fontWeight: '600',
+  },
+  cardClass: {
+    color: Colors.navyLight,
+    fontSize: 12,
+    fontWeight: '700',
   },
   timeRow: {
     flexDirection: 'row',
